@@ -20,6 +20,7 @@ import (
 	"crypto/tls"
 	"errors"
 	"flag"
+	"net/http"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -242,6 +243,7 @@ func main() {
 	if err := (&controller.ClusterRequestReconciler{
 		Client:            mgr.GetClient(),
 		Scheme:            mgr.GetScheme(),
+		HttpClient:        &http.Client{},
 		OsacInventoryUrl:  osacInventoryUrl,
 		OsacManagementUrl: osacManagementUrl,
 		AuthToken:         authToken,

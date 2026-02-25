@@ -30,3 +30,16 @@ rules:
   - get
   - patch
   - update
+- apiGroups:
+  - cloudkit.openshift.io
+  resources:
+  - testhosts
+  verbs:
+  - create
+  - delete
+  - deletecollection
+  - get
+  - list
+  - patch
+  - update
+  - watch

@@ -60,17 +60,23 @@ spec:
                   description: HostSet defines a set of hosts with the same class
                     and required count
                   properties:
+                    hostClass:
+                      description: HostClass specifies the class of the host
+                      type: string
                     size:
                       description: Size specifies the number of hosts required for
                         this host class
                       minimum: 1
                       type: integer
                   required:
+                  - hostClass
                   - size
                   type: object
                 description: HostSets defines the number of hosts needed for each
                   host set type.
                 type: object
+                x-kubernetes-validations:
+                - rule: self.all(key, self[key].hostClass == key)
               matchType:
                 default: Bare
                 description: MatchType specifies the criteria for selecting hosts
@@ -149,12 +155,16 @@ spec:
                   description: HostSet defines a set of hosts with the same class
                     and required count
                   properties:
+                    hostClass:
+                      description: HostClass specifies the class of the host
+                      type: string
                     size:
                       description: Size specifies the number of hosts required for
                         this host class
                       minimum: 1
                       type: integer
                   required:
+                  - hostClass
                   - size
                   type: object
                 description: HostSets shows the current allocation of hosts

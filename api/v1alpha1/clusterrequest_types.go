@@ -30,6 +30,7 @@ type ClusterRequestSpec struct {
 
 	// HostSets defines the number of hosts needed for each host set type.
 	// +kubebuilder:validation:Required
+	// +kubebuilder:validation:XValidation:rule="self.all(key, self[key].hostClass == key)"
 	HostSets map[string]HostSet `json:"hostSets"`
 }
 
@@ -56,10 +57,42 @@ type ClusterRequestStatus struct {
 
 // HostSet defines a set of hosts with the same class and required count
 type HostSet struct {
+	// HostClass specifies the class of the host
+	// +kubebuilder:validation:Required
+	HostClass string `json:"hostClass"`
+
 	// Size specifies the number of hosts required for this host class
 	// +kubebuilder:validation:Required
 	// +kubebuilder:validation:Minimum=1
 	Size int `json:"size"`
+}
+
+type TestHostSpec struct {
+	// rule="self == oldSelf",message="field is immutable"
+	NodeId string `json:"nodeId"`
+
+	// rule="self == oldSelf",message="field is immutable"
+	MatchType string `json:"matchType"`
+
+	// rule="self == oldSelf",message="field is immutable"
+	HostClass string `json:"hostClass"`
+
+	Online bool `json:"online"`
+}
+
+// +kubebuilder:object:root=true
+type TestHost struct {
+	metav1.TypeMeta   `json:",inline"`
+	metav1.ObjectMeta `json:"metadata,omitempty"`
+
+	Spec TestHostSpec `json:"spec,omitempty"`
+}
+
+// +kubebuilder:object:root=true
+type TestHostList struct {
+	metav1.TypeMeta `json:",inline"`
+	metav1.ListMeta `json:"metadata,omitempty"`
+	Items           []TestHost `json:"items"`
 }
 
 // +kubebuilder:object:root=true
@@ -90,4 +123,5 @@ type ClusterRequestList struct {
 
 func init() {
 	SchemeBuilder.Register(&ClusterRequest{}, &ClusterRequestList{})
+	SchemeBuilder.Register(&TestHost{}, &TestHostList{})
 }

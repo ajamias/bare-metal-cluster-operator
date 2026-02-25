@@ -44,26 +44,26 @@ const (
 
 // ClusterRequest condition reasons for HostsReady condition
 const (
-	// ClusterRequestReasonHostsAvailable indicates all required hosts have been allocated
+	// ClusterRequestReasonHostsAvailable indicates all required hosts have been allocated and ready
 	ClusterRequestReasonHostsAvailable = "HostsAvailable"
 
-	// ClusterRequestReasonHostsAllocating indicates hosts are being allocated
-	ClusterRequestReasonHostsAllocating = "HostsAllocating"
+	// ClusterRequestReasonHostsProgressing indicates hosts are being processed
+	ClusterRequestReasonHostsProgressing = "HostsProgressing"
 
-	// ClusterRequestReasonHostsUnavailable indicates requested hosts are not available
-	ClusterRequestReasonHostsUnavailable = "HostsUnavailable"
+	// ClusterRequestReasonHostsDeleting indicates hosts are being deleted/freed
+	ClusterRequestReasonHostsDeleting = "HostsDeleting"
 
-	// ClusterRequestReasonHostsFreeing indicates hosts are being freed/deallocated
-	ClusterRequestReasonHostsFreeing = "HostsFreeing"
+	// ClusterRequestReasonInventoryServiceFailed indicates communication with inventory service failed
+	ClusterRequestReasonInventoryServiceFailed = "InventoryServiceFailed"
 
-	// ClusterRequestReasonHostsFreed indicates hosts have been freed/deallocated
-	ClusterRequestReasonHostsFreed = "HostsFreed"
-
-	// ClusterRequestReasonHostValidationFailed indicates host validation failed
-	ClusterRequestReasonHostValidationFailed = "HostValidationFailed"
+	// ClusterRequestReasonHostOperationFailed indicates host attach/detach operations failed
+	ClusterRequestReasonHostOperationFailed = "HostOperationFailed"
 
 	// ClusterRequestReasonInsufficientHosts indicates not enough hosts match the criteria
 	ClusterRequestReasonInsufficientHosts = "InsufficientHosts"
+
+	// ClusterRequestReasonHostsUnavailable indicates requested hosts are not available
+	ClusterRequestReasonHostsUnavailable = "HostsUnavailable"
 )
 
 // InitializeStatusConditions initializes the ClusterRequest conditions
@@ -76,7 +76,7 @@ func (c *ClusterRequest) InitializeStatusConditions() {
 	c.initializeStatusCondition(
 		ClusterRequestConditionTypeHostsReady,
 		metav1.ConditionFalse,
-		ClusterRequestReasonHostsAllocating,
+		ClusterRequestReasonHostsProgressing,
 	)
 }
 
