@@ -4,9 +4,9 @@ kind: CustomResourceDefinition
 metadata:
   annotations:
     controller-gen.kubebuilder.io/version: v0.18.0
-  name: testhosts.cloudkit.openshift.io
+  name: testhosts.osac.openshift.io
 spec:
-  group: cloudkit.openshift.io
+  group: osac.openshift.io
   names:
     kind: TestHost
     listKind: TestHostList

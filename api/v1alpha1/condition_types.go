@@ -21,66 +21,66 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
-// ClusterRequest condition types
+// BareMetalCluster condition types
 const (
-	ClusterRequestConditionTypeReady      = "Ready"
-	ClusterRequestConditionTypeHostsReady = "HostsReady"
+	BareMetalClusterConditionTypeReady      = "Ready"
+	BareMetalClusterConditionTypeHostsReady = "HostsReady"
 )
 
-// ClusterRequest condition reasons for Ready condition
+// BareMetalCluster condition reasons for Ready condition
 const (
-	// ClusterRequestReasonReady indicates the cluster request is fully ready
-	ClusterRequestReasonReady = "Ready"
+	// BareMetalClusterReasonReady indicates the cluster request is fully ready
+	BareMetalClusterReasonReady = "Ready"
 
-	// ClusterRequestReasonProgressing indicates the cluster request is being processed
-	ClusterRequestReasonProgressing = "Progressing"
+	// BareMetalClusterReasonProgressing indicates the cluster request is being processed
+	BareMetalClusterReasonProgressing = "Progressing"
 
-	// ClusterRequestReasonFailed indicates the cluster request has failed
-	ClusterRequestReasonFailed = "Failed"
+	// BareMetalClusterReasonFailed indicates the cluster request has failed
+	BareMetalClusterReasonFailed = "Failed"
 
-	// ClusterRequestReasonDeleting indicates the cluster request is being deleted
-	ClusterRequestReasonDeleting = "Deleting"
+	// BareMetalClusterReasonDeleting indicates the cluster request is being deleted
+	BareMetalClusterReasonDeleting = "Deleting"
 )
 
-// ClusterRequest condition reasons for HostsReady condition
+// BareMetalCluster condition reasons for HostsReady condition
 const (
-	// ClusterRequestReasonHostsAvailable indicates all required hosts have been allocated and ready
-	ClusterRequestReasonHostsAvailable = "HostsAvailable"
+	// BareMetalClusterReasonHostsAvailable indicates all required hosts have been allocated and ready
+	BareMetalClusterReasonHostsAvailable = "HostsAvailable"
 
-	// ClusterRequestReasonHostsProgressing indicates hosts are being processed
-	ClusterRequestReasonHostsProgressing = "HostsProgressing"
+	// BareMetalClusterReasonHostsProgressing indicates hosts are being processed
+	BareMetalClusterReasonHostsProgressing = "HostsProgressing"
 
-	// ClusterRequestReasonHostsDeleting indicates hosts are being deleted/freed
-	ClusterRequestReasonHostsDeleting = "HostsDeleting"
+	// BareMetalClusterReasonHostsDeleting indicates hosts are being deleted/freed
+	BareMetalClusterReasonHostsDeleting = "HostsDeleting"
 
-	// ClusterRequestReasonInventoryServiceFailed indicates communication with inventory service failed
-	ClusterRequestReasonInventoryServiceFailed = "InventoryServiceFailed"
+	// BareMetalClusterReasonInventoryServiceFailed indicates communication with inventory service failed
+	BareMetalClusterReasonInventoryServiceFailed = "InventoryServiceFailed"
 
-	// ClusterRequestReasonHostOperationFailed indicates host attach/detach operations failed
-	ClusterRequestReasonHostOperationFailed = "HostOperationFailed"
+	// BareMetalClusterReasonHostOperationFailed indicates host attach/detach operations failed
+	BareMetalClusterReasonHostOperationFailed = "HostOperationFailed"
 
-	// ClusterRequestReasonInsufficientHosts indicates not enough hosts match the criteria
-	ClusterRequestReasonInsufficientHosts = "InsufficientHosts"
+	// BareMetalClusterReasonInsufficientHosts indicates not enough hosts match the criteria
+	BareMetalClusterReasonInsufficientHosts = "InsufficientHosts"
 
-	// ClusterRequestReasonHostsUnavailable indicates requested hosts are not available
-	ClusterRequestReasonHostsUnavailable = "HostsUnavailable"
+	// BareMetalClusterReasonHostsUnavailable indicates requested hosts are not available
+	BareMetalClusterReasonHostsUnavailable = "HostsUnavailable"
 )
 
-// InitializeStatusConditions initializes the ClusterRequest conditions
-func (c *ClusterRequest) InitializeStatusConditions() {
+// InitializeStatusConditions initializes the BareMetalCluster conditions
+func (c *BareMetalCluster) InitializeStatusConditions() {
 	c.initializeStatusCondition(
-		ClusterRequestConditionTypeReady,
+		BareMetalClusterConditionTypeReady,
 		metav1.ConditionFalse,
-		ClusterRequestReasonProgressing,
+		BareMetalClusterReasonProgressing,
 	)
 	c.initializeStatusCondition(
-		ClusterRequestConditionTypeHostsReady,
+		BareMetalClusterConditionTypeHostsReady,
 		metav1.ConditionFalse,
-		ClusterRequestReasonHostsProgressing,
+		BareMetalClusterReasonHostsProgressing,
 	)
 }
 
-func (c *ClusterRequest) SetStatusCondition(
+func (c *BareMetalCluster) SetStatusCondition(
 	conditionType string,
 	status metav1.ConditionStatus,
 	reason string,
@@ -95,7 +95,7 @@ func (c *ClusterRequest) SetStatusCondition(
 }
 
 // initializeStatusCondition initializes a single condition if it doesn't already exist
-func (c *ClusterRequest) initializeStatusCondition(
+func (c *BareMetalCluster) initializeStatusCondition(
 	conditionType string,
 	status metav1.ConditionStatus,
 	reason string,

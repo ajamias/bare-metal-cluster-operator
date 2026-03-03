@@ -27,10 +27,10 @@ import (
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
-	cloudkitopenshiftiov1alpha1 "github.com/ajamias/bare-metal-operator/api/v1alpha1"
+	osacopenshiftiov1alpha1 "github.com/ajamias/bare-metal-operator/api/v1alpha1"
 )
 
-var _ = Describe("ClusterRequest Controller", func() {
+var _ = Describe("BareMetalCluster Controller", func() {
 	Context("When reconciling a resource", func() {
 		const resourceName = "test-resource"
 
@@ -40,13 +40,13 @@ var _ = Describe("ClusterRequest Controller", func() {
 			Name:      resourceName,
 			Namespace: "default", // TODO(user):Modify as needed
 		}
-		clusterrequest := &cloudkitopenshiftiov1alpha1.ClusterRequest{}
+		baremetalcluster := &osacopenshiftiov1alpha1.BareMetalCluster{}
 
 		BeforeEach(func() {
-			By("creating the custom resource for the Kind ClusterRequest")
-			err := k8sClient.Get(ctx, typeNamespacedName, clusterrequest)
+			By("creating the custom resource for the Kind BareMetalCluster")
+			err := k8sClient.Get(ctx, typeNamespacedName, baremetalcluster)
 			if err != nil && errors.IsNotFound(err) {
-				resource := &cloudkitopenshiftiov1alpha1.ClusterRequest{
+				resource := &osacopenshiftiov1alpha1.BareMetalCluster{
 					ObjectMeta: metav1.ObjectMeta{
 						Name:      resourceName,
 						Namespace: "default",
@@ -59,16 +59,16 @@ var _ = Describe("ClusterRequest Controller", func() {
 
 		AfterEach(func() {
 			// TODO(user): Cleanup logic after each test, like removing the resource instance.
-			resource := &cloudkitopenshiftiov1alpha1.ClusterRequest{}
+			resource := &osacopenshiftiov1alpha1.BareMetalCluster{}
 			err := k8sClient.Get(ctx, typeNamespacedName, resource)
 			Expect(err).NotTo(HaveOccurred())
 
-			By("Cleanup the specific resource instance ClusterRequest")
+			By("Cleanup the specific resource instance BareMetalCluster")
 			Expect(k8sClient.Delete(ctx, resource)).To(Succeed())
 		})
 		It("should successfully reconcile the resource", func() {
 			By("Reconciling the created resource")
-			controllerReconciler := &ClusterRequestReconciler{
+			controllerReconciler := &BareMetalClusterReconciler{
 				Client: k8sClient,
 				Scheme: k8sClient.Scheme(),
 			}

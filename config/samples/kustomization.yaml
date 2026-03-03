@@ -1,5 +1,5 @@
 ## Append samples of your project ##
 resources:
-- v1alpha1_clusterrequest.yaml
-- _v1alpha1_clusterrequest.yaml
+- v1alpha1_baremetalcluster.yaml
+- _v1alpha1_baremetalcluster.yaml
 # +kubebuilder:scaffold:manifestskustomizesamples

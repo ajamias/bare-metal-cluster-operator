@@ -4,17 +4,17 @@ kind: CustomResourceDefinition
 metadata:
   annotations:
     controller-gen.kubebuilder.io/version: v0.18.0
-  name: clusterrequests.cloudkit.openshift.io
+  name: baremetalclusters.osac.openshift.io
 spec:
-  group: cloudkit.openshift.io
+  group: osac.openshift.io
   names:
-    kind: ClusterRequest
-    listKind: ClusterRequestList
-    plural: clusterrequests
+    kind: BareMetalCluster
+    listKind: BareMetalClusterList
+    plural: baremetalclusters
     shortNames:
     - cr
     - creq
-    singular: clusterrequest
+    singular: baremetalcluster
   scope: Namespaced
   versions:
   - additionalPrinterColumns:
@@ -33,7 +33,7 @@ spec:
     name: v1alpha1
     schema:
       openAPIV3Schema:
-        description: ClusterRequest is the Schema for the clusterrequests API.
+        description: BareMetalCluster is the Schema for the baremetalclusters API.
         properties:
           apiVersion:
             description: |-
@@ -53,7 +53,7 @@ spec:
           metadata:
             type: object
           spec:
-            description: ClusterRequestSpec defines the desired state of ClusterRequest.
+            description: BareMetalClusterSpec defines the desired state of BareMetalCluster.
             properties:
               hostSets:
                 additionalProperties:
@@ -90,11 +90,11 @@ spec:
             - matchType
             type: object
           status:
-            description: ClusterRequestStatus defines the observed state of ClusterRequest.
+            description: BareMetalClusterStatus defines the observed state of BareMetalCluster.
             properties:
               conditions:
                 description: Conditions represent the latest available observations
-                  of the ClusterRequest state
+                  of the BareMetalCluster state
                 items:
                   description: Condition contains details for one aspect of the current
                     state of this API Resource.

@@ -22,7 +22,7 @@ resources:
 # default, aiding admins in cluster management. Those roles are
 # not used by the bare-metal-operator itself. You can comment the following lines
 # if you do not want those helpers be installed with your Project.
-- clusterrequest_admin_role.yaml
-- clusterrequest_editor_role.yaml
-- clusterrequest_viewer_role.yaml
+- baremetalcluster_admin_role.yaml
+- baremetalcluster_editor_role.yaml
+- baremetalcluster_viewer_role.yaml
 
