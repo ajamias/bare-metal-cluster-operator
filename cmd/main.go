@@ -41,8 +41,9 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/webhook"
 
 	osacopenshiftiov1alpha1 "github.com/ajamias/bare-metal-operator/api/v1alpha1"
-	"github.com/ajamias/bare-metal-operator/internal/controller"
 	// +kubebuilder:scaffold:imports
+	"github.com/ajamias/bare-metal-operator/internal/controller"
+	"github.com/ajamias/bare-metal-operator/internal/inventory"
 )
 
 var (
@@ -240,13 +241,12 @@ func main() {
 		os.Exit(1)
 	}
 
+	inventoryClient := inventory.NewInventoryClient(&http.Client{}, osacInventoryUrl, osacManagementUrl, authToken)
+
 	if err := (&controller.BareMetalClusterReconciler{
-		Client:            mgr.GetClient(),
-		Scheme:            mgr.GetScheme(),
-		HttpClient:        &http.Client{},
-		OsacInventoryUrl:  osacInventoryUrl,
-		OsacManagementUrl: osacManagementUrl,
-		AuthToken:         authToken,
+		Client:          mgr.GetClient(),
+		Scheme:          mgr.GetScheme(),
+		InventoryClient: inventoryClient,
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "BareMetalCluster")
 		os.Exit(1)

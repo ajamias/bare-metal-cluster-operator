@@ -17,14 +17,9 @@ limitations under the License.
 package controller
 
 import (
-	"bytes"
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
-	"net/http"
-	"net/url"
 	"sync"
 	"time"
 
@@ -39,47 +34,17 @@ import (
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 
 	v1alpha1 "github.com/ajamias/bare-metal-operator/api/v1alpha1"
+	"github.com/ajamias/bare-metal-operator/internal/inventory"
 )
 
 // BareMetalClusterReconciler reconciles a BareMetalCluster object
 type BareMetalClusterReconciler struct {
 	client.Client
-	Scheme            *runtime.Scheme
-	HttpClient        *http.Client
-	OsacInventoryUrl  *url.URL
-	OsacManagementUrl *url.URL
-	AuthToken         string
+	Scheme          *runtime.Scheme
+	InventoryClient *inventory.InventoryClient
 }
 
 const BareMetalClusterFinalizer = "osac.openshift.io/cluster-request"
-
-// HostResponse represents the response from the inventory service
-type HostResponse struct {
-	Hosts []Host `json:"nodes"`
-}
-
-// TODO: replace this with future Host type
-// Host represents a single host from the inventory
-type Host struct {
-	NodeId         string         `json:"uuid"`
-	HostClass      string         `json:"resource_class"`
-	ProvisionState string         `json:"provision_state"` // available, active, etc
-	Extra          map[string]any `json:"extra"`           // contains matchType and clusterId
-}
-
-type HostAction int
-
-const (
-	HostAttach HostAction = iota
-	HostDetach
-)
-
-// HostAttachmentOperation represents a single host attach/detach operation
-type HostAttachmentAction struct {
-	Host      *Host
-	ClusterId string
-	Action    HostAction
-}
 
 type contextKey string
 
@@ -110,7 +75,8 @@ func (r *BareMetalClusterReconciler) Reconcile(ctx context.Context, req ctrl.Req
 
 	var result ctrl.Result
 	if !bareMetalCluster.DeletionTimestamp.IsZero() {
-		result, err = r.handleDeletion(ctx, bareMetalCluster)
+		err = r.handleDeletion(ctx, bareMetalCluster)
+		result = ctrl.Result{}
 	} else {
 		result, err = r.handleUpdate(ctx, bareMetalCluster)
 	}
@@ -180,14 +146,6 @@ func (r *BareMetalClusterReconciler) handleUpdate(ctx context.Context, bareMetal
 		bareMetalCluster.Status.HostSets = []v1alpha1.HostSet{}
 	}
 
-	/*
-		err := r.verifyNetworkHostSets(bareMetalCluster)
-		if err != nil {
-			log.Error(err, "Failed to verify network host sets")
-			return ctrl.Result{}, err
-		}
-	*/
-
 	// positive delta means add hosts of the HostClass, negative means remove
 	// hostClassToHostSetDelta is never written to after init-ing it, so we dont need sync.Map
 	hostClassToHostSetDelta := map[string]int{}
@@ -253,7 +211,7 @@ func (r *BareMetalClusterReconciler) handleUpdate(ctx context.Context, bareMetal
 				}
 				log.Info(fmt.Sprintf("Attached %d %s hosts to cluster %s", delta, hostClass, string(bareMetalCluster.UID)))
 			} else if delta < 0 {
-				hosts, err := r.getHosts(
+				hosts, err := r.InventoryClient.GetHosts(
 					ctx,
 					hostClass,
 					-delta,
@@ -319,8 +277,7 @@ func (r *BareMetalClusterReconciler) handleUpdate(ctx context.Context, bareMetal
 }
 
 // handleDeletion handles the cleanup when a BareMetalCluster is being deleted
-// nolint
-func (r *BareMetalClusterReconciler) handleDeletion(ctx context.Context, bareMetalCluster *v1alpha1.BareMetalCluster) (ctrl.Result, error) {
+func (r *BareMetalClusterReconciler) handleDeletion(ctx context.Context, bareMetalCluster *v1alpha1.BareMetalCluster) error {
 	log := logf.FromContext(ctx)
 	log.Info("Handling delete", "name", bareMetalCluster.Name)
 
@@ -345,7 +302,7 @@ func (r *BareMetalClusterReconciler) handleDeletion(ctx context.Context, bareMet
 		wg.Add(1)
 		go func(hostSet v1alpha1.HostSet) {
 			defer wg.Done()
-			hosts, err := r.getHosts(
+			hosts, err := r.InventoryClient.GetHosts(
 				ctx,
 				hostSet.HostClass,
 				hostSet.Size,
@@ -395,65 +352,35 @@ func (r *BareMetalClusterReconciler) handleDeletion(ctx context.Context, bareMet
 		log.Error(err, "Failed to detach host during deletion")
 	}
 	if err != nil {
-		return ctrl.Result{}, err
+		return err
 	}
 
 	log.Info("Successfully deleted cluster")
 	if controllerutil.RemoveFinalizer(bareMetalCluster, BareMetalClusterFinalizer) {
 		// Update should fire another reconcile event, so just return
 		err := r.Update(ctx, bareMetalCluster)
-		return ctrl.Result{}, err
-	}
-
-	return ctrl.Result{}, nil
-}
-
-/*
-func (r *BareMetalClusterReconciler) verifyNetworkHostSets(bareMetalCluster *v1alpha1.BareMetalCluster) error {
-	networks := bareMetalCluster.Spec.Networks
-	clusterHostSets := map[string]v1alpha1.HostSet{}
-	maps.Copy(clusterHostSets, bareMetalCluster.Spec.HostSets)
-
-	for i := range networks {
-		for hostClass, networkHostSet := range networks[i].HostSets {
-			clusterHostSet := clusterHostSets[hostClass]
-			clusterHostSet.Size -= networkHostSet.Size
-			clusterHostSets[hostClass] = clusterHostSet
-		}
-	}
-
-	for hostClass := range clusterHostSets {
-		if clusterHostSets[hostClass].Size < 0 {
-			bareMetalCluster.SetStatusCondition(
-				v1alpha1.BareMetalClusterConditionTypeHostsReady,
-				metav1.ConditionFalse,
-				v1alpha1.BareMetalClusterReasonHostsUnavailable,
-				"Failed to verify network host sets",
-			)
-			return errors.New("network expects more hosts than specified")
-		}
+		return err
 	}
 
 	return nil
 }
-*/
 
 func (r *BareMetalClusterReconciler) verifyAvailableHosts(
 	ctx context.Context,
 	bareMetalCluster *v1alpha1.BareMetalCluster,
 	hostClassToHostSetDelta map[string]int,
-) (map[string][]Host, error) {
+) (map[string][]inventory.Host, error) {
 	log := logf.FromContext(ctx).V(1)
 	ctx = logf.IntoContext(ctx, log)
 
-	hostClassToAvailableHosts := map[string][]Host{}
+	hostClassToAvailableHosts := map[string][]inventory.Host{}
 	// TODO: can use goroutines
 	for hostClass, delta := range hostClassToHostSetDelta {
 		if delta <= 0 {
 			continue
 		}
 
-		hosts, err := r.getHosts(
+		hosts, err := r.InventoryClient.GetHosts(
 			ctx,
 			hostClass,
 			delta,
@@ -496,123 +423,55 @@ func (r *BareMetalClusterReconciler) verifyAvailableHosts(
 	return hostClassToAvailableHosts, nil
 }
 
-func (r *BareMetalClusterReconciler) getHosts(
-	ctx context.Context,
-	hostClass string,
-	count int,
-	matchType string,
-	clusterId string,
-) ([]Host, error) {
-	log := logf.FromContext(ctx).V(1)
-	ctx = logf.IntoContext(ctx, log)
-
-	inventoryURL := *r.OsacInventoryUrl
-	inventoryURL.Path = "/v1/nodes/detail"
-	query := url.Values{}
-	// TODO: set query values for pluggable bare metal adapter
-	inventoryURL.RawQuery = query.Encode()
-
-	httpRequest, err := http.NewRequestWithContext(ctx, http.MethodGet, inventoryURL.String(), nil)
-	if err != nil {
-		log.Error(err, "Failed to create NewRequestWithContext", "method", "getHosts")
-		return nil, err
-	}
-
-	httpRequest.Header.Set("X-Auth-Token", r.AuthToken)
-	httpRequest.Header.Set("X-OpenStack-Ironic-API-Version", "1.69")
-
-	response, err := r.HttpClient.Do(httpRequest)
-	if err != nil {
-		log.Error(err, "Failed to perform request", "method", "getHosts")
-		return nil, err
-	}
-	defer func() {
-		err := response.Body.Close()
-		if err != nil {
-			log.Error(err, "Failed to close connection", "method", "getHosts")
-		}
-	}()
-
-	if response.StatusCode != http.StatusOK {
-		message, err := io.ReadAll(response.Body)
-		if err != nil {
-			log.Error(err, "Failed to read response body", "method", "getHosts")
-			return nil, err
-		}
-		err = errors.New(string(message))
-		return nil, err
-	}
-
-	hostResponse := HostResponse{}
-	decoder := json.NewDecoder(response.Body)
-	if err := decoder.Decode(&hostResponse); err != nil {
-		log.Error(err, "Failed to decode response body", "method", "getHosts")
-		return nil, err
-	}
-
-	// assume filters don't work on the inventory
-	hosts := []Host{}
-	for _, host := range hostResponse.Hosts {
-		hostMatchType := ""
-		hostClusterId := ""
-		if host.Extra != nil {
-			if mt, ok := host.Extra["matchType"].(string); ok {
-				hostMatchType = mt
-			}
-			if cid, ok := host.Extra["clusterId"].(string); ok {
-				hostClusterId = cid
-			}
-		}
-
-		if host.HostClass == hostClass &&
-			hostMatchType == matchType &&
-			hostClusterId == clusterId {
-			hosts = append(hosts, host)
-		}
-
-		if count > 0 && len(hosts) >= count {
-			break
-		}
-	}
-
-	log.Info("Successfully queried for hosts", "hosts", hosts)
-
-	return hosts, nil
-}
-
 func (r *BareMetalClusterReconciler) setHostsAttachment(
 	ctx context.Context,
 	bareMetalCluster *v1alpha1.BareMetalCluster,
-	hosts []Host,
+	hosts []inventory.Host,
 	clusterId string,
 	hostClassToCurrentHostSetSize map[string]int,
 ) error {
-
+	var wg sync.WaitGroup
+	resultErrors := make(chan error, len(hosts))
 	if clusterId == "" {
 		for i := range hosts {
-			err := r.unmarkAndDetachHost(
-				ctx,
-				bareMetalCluster,
-				hosts[i],
-				hostClassToCurrentHostSetSize,
-			)
-			if err != nil {
-				return err
-			}
+			wg.Add(1)
+			go func(i int) {
+				defer wg.Done()
+				err := r.unmarkAndDetachHost(
+					ctx,
+					bareMetalCluster,
+					hosts[i],
+					hostClassToCurrentHostSetSize,
+				)
+				if err != nil {
+					resultErrors <- err
+				}
+			}(i)
 		}
 	} else {
 		for i := range hosts {
-			err := r.markAndAttachHost(
-				ctx,
-				bareMetalCluster,
-				hosts[i],
-				clusterId,
-				hostClassToCurrentHostSetSize,
-			)
-			if err != nil {
-				return err
-			}
+			wg.Add(1)
+			go func(i int) {
+				defer wg.Done()
+				err := r.markAndAttachHost(
+					ctx,
+					bareMetalCluster,
+					hosts[i],
+					clusterId,
+					hostClassToCurrentHostSetSize,
+				)
+				if err != nil {
+					resultErrors <- err
+				}
+			}(i)
 		}
+	}
+	wg.Wait()
+	close(resultErrors)
+
+	// return the first error encountered
+	for err := range resultErrors {
+		return err
 	}
 
 	return nil
@@ -621,7 +480,7 @@ func (r *BareMetalClusterReconciler) setHostsAttachment(
 func (r *BareMetalClusterReconciler) markAndAttachHost(
 	ctx context.Context,
 	bareMetalCluster *v1alpha1.BareMetalCluster,
-	host Host,
+	host inventory.Host,
 	clusterId string,
 	hostClassToCurrentHostSetSize map[string]int,
 ) error {
@@ -632,7 +491,7 @@ func (r *BareMetalClusterReconciler) markAndAttachHost(
 
 	// mark inventory host as attached
 	hostClass := host.HostClass
-	err := r.patchInventoryHostClusterId(ctx, host.NodeId, clusterId)
+	err := r.InventoryClient.PatchInventoryHostClusterId(ctx, host.NodeId, clusterId)
 	if err != nil {
 		log.Error(err, "Failed to attach host", "NodeId", host.NodeId)
 		bareMetalCluster.SetStatusCondition(
@@ -702,7 +561,7 @@ func (r *BareMetalClusterReconciler) markAndAttachHost(
 			return err
 		}
 	} else if len(existingHosts.Items) > 0 {
-		err = errors.New("Host CR already exists")
+		err = errors.New("host CR already exists")
 		log.Error(err, "Failed to create Host CR", "NodeId", host.NodeId)
 		return err
 	} else {
@@ -725,7 +584,7 @@ func (r *BareMetalClusterReconciler) markAndAttachHost(
 func (r *BareMetalClusterReconciler) unmarkAndDetachHost(
 	ctx context.Context,
 	bareMetalCluster *v1alpha1.BareMetalCluster,
-	host Host,
+	host inventory.Host,
 	hostClassToCurrentHostSetSize map[string]int,
 ) error {
 	log := logf.FromContext(ctx).V(1)
@@ -754,7 +613,7 @@ func (r *BareMetalClusterReconciler) unmarkAndDetachHost(
 
 	// mark inventory host as detached
 	hostClass := host.HostClass
-	err = r.patchInventoryHostClusterId(ctx, host.NodeId, "")
+	err = r.InventoryClient.PatchInventoryHostClusterId(ctx, host.NodeId, "")
 	if err != nil {
 		log.Error(err, "Failed to free host", "NodeId", host.NodeId)
 		bareMetalCluster.SetStatusCondition(
@@ -774,63 +633,6 @@ func (r *BareMetalClusterReconciler) unmarkAndDetachHost(
 	mutex.Unlock()
 
 	log.Info("Successfully detached host", "NodeId", host.NodeId)
-
-	return nil
-}
-
-func (r *BareMetalClusterReconciler) patchInventoryHostClusterId(ctx context.Context, nodeId string, clusterId string) error {
-	log := logf.FromContext(ctx).V(1)
-
-	managementURL := *r.OsacManagementUrl
-	managementURL.Path = "/v1/nodes/" + nodeId
-
-	patchBody := []map[string]string{
-		{
-			"op":    "replace",
-			"path":  "/extra/clusterId",
-			"value": clusterId,
-		},
-	}
-
-	bodyBytes, err := json.Marshal(patchBody)
-	if err != nil {
-		log.Error(err, "Failed to marshal request body", "method", "patchInventoryHostClusterId")
-		return err
-	}
-
-	httpRequest, err := http.NewRequestWithContext(ctx, http.MethodPatch, managementURL.String(), bytes.NewReader(bodyBytes))
-	if err != nil {
-		log.Error(err, "Failed to create NewRequestWithContext", "method", "patchInventoryHostClusterId")
-		return err
-	}
-
-	httpRequest.Header.Set("X-Auth-Token", r.AuthToken)
-	httpRequest.Header.Set("X-OpenStack-Ironic-API-Version", "1.69")
-	httpRequest.Header.Set("Content-Type", "application/json-patch+json")
-
-	response, err := r.HttpClient.Do(httpRequest)
-	if err != nil {
-		log.Error(err, "Failed to perform request", "method", "patchInventoryHostClusterId")
-		return err
-	}
-	defer func() {
-		err := response.Body.Close()
-		if err != nil {
-			log.Error(err, "Failed to close connection", "method", "patchInventoryHostClusterId")
-		}
-	}()
-
-	if response.StatusCode < 200 || response.StatusCode >= 300 {
-		message, err := io.ReadAll(response.Body)
-		if err != nil {
-			log.Error(err, "Failed to read response body", "method", "patchInventoryHostClusterId")
-			return err
-		}
-		err = errors.New(string(message))
-		return err
-	}
-
-	log.Info("Successfully patched host", "host", nodeId)
 
 	return nil
 }
