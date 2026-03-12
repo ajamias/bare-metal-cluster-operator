@@ -96,6 +96,10 @@ type TestHostSpec struct {
 	HostClass string `json:"hostClass"`
 
 	Online bool `json:"online"`
+
+	SetUpWorkflow string `json:"setUpWorkflow"`
+
+	TearDownWorkflow string `json:"tearDownWorkflow"`
 }
 
 // +kubebuilder:object:root=true

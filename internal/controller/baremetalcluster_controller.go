@@ -50,6 +50,12 @@ const BareMetalClusterFinalizer = "osac.openshift.io/cluster-request"
 
 type contextKey string
 
+type hostOperationResult struct {
+	Host   inventory.Host
+	Result ctrl.Result
+	Err    error
+}
+
 // +kubebuilder:rbac:groups=osac.openshift.io,resources=baremetalclusters,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=osac.openshift.io,resources=baremetalclusters/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups=osac.openshift.io,resources=baremetalclusters/finalizers,verbs=update
@@ -150,28 +156,19 @@ func (r *BareMetalClusterReconciler) handleUpdate(ctx context.Context, bareMetal
 	}
 
 	// positive delta means add hosts of the HostClass, negative means remove
-	// hostClassToHostSetDelta is never written to after init-ing it, so we dont need sync.Map
-	hostClassToHostSetDelta := map[string]int{}
-	hostClassToCurrentHostSetSize := map[string]int{}
-	requiresUpdate := false
-	for _, hostSet := range bareMetalCluster.Spec.HostSets {
-		hostClassToHostSetDelta[hostSet.HostClass] = hostSet.Size
-	}
-	for _, hostSet := range bareMetalCluster.Status.HostSets {
-		hostClassToHostSetDelta[hostSet.HostClass] -= hostSet.Size
-		if hostClassToHostSetDelta[hostSet.HostClass] != 0 {
-			requiresUpdate = true
-		}
-		hostClassToCurrentHostSetSize[hostSet.HostClass] = hostSet.Size
+	hostClassToHostSetDelta, hostClassToCurrentHostSetSize, hostClassToHostsToDetach, requiresUpdate, err := r.syncWithInventory(ctx, bareMetalCluster)
+	if err != nil {
+		log.Error(err, "Failed to sync status with inventory")
+		return ctrl.Result{}, err
 	}
 
-	if !requiresUpdate && len(bareMetalCluster.Status.HostSets) != 0 {
+	if !requiresUpdate {
 		log.Info("No update required")
 		bareMetalCluster.SetStatusCondition(
 			v1alpha1.BareMetalClusterConditionTypeHostsReady,
 			metav1.ConditionTrue,
 			v1alpha1.BareMetalClusterReasonHostsAvailable,
-			"Successfully attached/detached all hosts",
+			"Successfully reconciled hosts",
 		)
 		return ctrl.Result{}, nil
 	}
@@ -188,71 +185,70 @@ func (r *BareMetalClusterReconciler) handleUpdate(ctx context.Context, bareMetal
 
 	// attach or detach hosts in parallel for each host class
 	var wg sync.WaitGroup
-	resultErrors := make(chan error, len(hostClassToHostSetDelta))
+	chanLen := 0
+	for _, delta := range hostClassToHostSetDelta {
+		if delta > 0 {
+			chanLen += delta
+		} else {
+			chanLen -= delta
+		}
+	}
+	results := make(chan hostOperationResult, chanLen)
 	ctx = context.WithValue(ctx, contextKey("mutex"), &sync.Mutex{})
 
 	for hostClass, delta := range hostClassToHostSetDelta {
-		if delta == 0 {
+		if delta > 0 {
+			for _, host := range hostClassToAvailableHosts[hostClass] {
+				wg.Add(1)
+				go func(host inventory.Host) {
+					defer wg.Done()
+					// TODO: distributedMutex.Lock(host)
+					// TODO: defer distributedMutex.Unlock(host)
+					result, err := r.markAndAttachHost(
+						ctx,
+						bareMetalCluster,
+						host,
+						hostClassToCurrentHostSetSize,
+					)
+					results <- hostOperationResult{
+						Host:   host,
+						Result: result,
+						Err:    err,
+					}
+				}(host)
+			}
+		} else if delta < 0 {
+			for _, host := range hostClassToHostsToDetach[hostClass] {
+				wg.Add(1)
+				go func(host inventory.Host) {
+					defer wg.Done()
+					// TODO: distributedMutex.Lock(host)
+					// TODO: defer distributedMutex.Unlock(host)
+					err := r.unmarkAndDetachHost(
+						ctx,
+						bareMetalCluster,
+						host,
+						hostClassToCurrentHostSetSize,
+					)
+					results <- hostOperationResult{
+						Host:   host,
+						Result: ctrl.Result{},
+						Err:    err,
+					}
+				}(host)
+			}
+		} else if delta == 0 {
 			continue
 		}
-
-		wg.Add(1)
-		go func(hostClass string, delta int) {
-			defer wg.Done()
-			if delta > 0 {
-				hosts := hostClassToAvailableHosts[hostClass]
-				err = r.setHostsAttachment(
-					ctx,
-					bareMetalCluster,
-					hosts,
-					string(bareMetalCluster.UID),
-					hostClassToCurrentHostSetSize,
-				)
-				if err != nil {
-					resultErrors <- err
-					return
-				}
-				log.Info(fmt.Sprintf("Attached %d %s hosts to cluster %s", delta, hostClass, string(bareMetalCluster.UID)))
-			} else if delta < 0 {
-				hosts, err := r.InventoryClient.GetHosts(
-					ctx,
-					hostClass,
-					-delta,
-					bareMetalCluster.Spec.MatchType,
-					string(bareMetalCluster.UID),
-				)
-				if err != nil {
-					log.Error(err, "Failed to get hosts from inventory")
-					bareMetalCluster.SetStatusCondition(
-						v1alpha1.BareMetalClusterConditionTypeHostsReady,
-						metav1.ConditionFalse,
-						v1alpha1.BareMetalClusterReasonInventoryServiceFailed,
-						"Failed to get hosts from inventory",
-					)
-					resultErrors <- err
-					return
-				}
-
-				err = r.setHostsAttachment(
-					ctx,
-					bareMetalCluster,
-					hosts,
-					"",
-					hostClassToCurrentHostSetSize,
-				)
-				if err != nil {
-					resultErrors <- err
-					return
-				}
-				log.Info(fmt.Sprintf("Detached %d %s hosts from cluster %s", -delta, hostClass, string(bareMetalCluster.UID)))
-			}
-		}(hostClass, delta)
 	}
 	wg.Wait()
 
 	// need to update HostSets even on failure
 	updatedHostSets := make([]v1alpha1.HostSet, 0, len(hostClassToCurrentHostSetSize))
 	for hostClass, size := range hostClassToCurrentHostSetSize {
+		if size <= 0 {
+			continue
+		}
 		updatedHostSets = append(updatedHostSets, v1alpha1.HostSet{
 			HostClass: hostClass,
 			Size:      size,
@@ -260,20 +256,26 @@ func (r *BareMetalClusterReconciler) handleUpdate(ctx context.Context, bareMetal
 	}
 	bareMetalCluster.Status.HostSets = updatedHostSets
 
-	close(resultErrors)
-	for err = range resultErrors {
-		log.Error(err, "Failed to attach/detach host")
-	}
-	if err != nil {
-		return ctrl.Result{}, err
+	close(results)
+	for result := range results {
+		if !result.Result.IsZero() || result.Err != nil {
+			log.Info("Unsuccessful in updating host-" + result.Host.NodeId)
+			bareMetalCluster.SetStatusCondition(
+				v1alpha1.BareMetalClusterConditionTypeHostsReady,
+				metav1.ConditionTrue,
+				v1alpha1.BareMetalClusterReasonHostsAvailable,
+				"Failed to attach/detach host",
+			)
+			return result.Result, result.Err
+		}
 	}
 
-	log.Info("Successfully set up all hosts")
+	log.Info("Successfully reconciled hosts")
 	bareMetalCluster.SetStatusCondition(
 		v1alpha1.BareMetalClusterConditionTypeHostsReady,
 		metav1.ConditionTrue,
 		v1alpha1.BareMetalClusterReasonHostsAvailable,
-		"Successfully set up all hosts",
+		"Successfully reconciled hosts",
 	)
 
 	registeredProfile, ok := profile.Get(bareMetalCluster.Spec.Profile.Name)
@@ -323,59 +325,51 @@ func (r *BareMetalClusterReconciler) handleDeletion(ctx context.Context, bareMet
 		}
 	}
 
-	var err error
-
-	hostClassToCurrentHostSetSize := map[string]int{}
-	for _, hostSet := range bareMetalCluster.Status.HostSets {
-		hostClassToCurrentHostSetSize[hostSet.HostClass] = hostSet.Size
+	// Get all hosts currently assigned to this cluster
+	currentHosts, err := r.InventoryClient.GetHosts(ctx, string(bareMetalCluster.UID))
+	if err != nil {
+		log.Error(err, "Failed to get hosts from inventory during deletion")
+		bareMetalCluster.SetStatusCondition(
+			v1alpha1.BareMetalClusterConditionTypeHostsReady,
+			metav1.ConditionFalse,
+			v1alpha1.BareMetalClusterReasonInventoryServiceFailed,
+			"Failed to get hosts from inventory during deletion",
+		)
+		return err
 	}
 
-	// detach hosts in parallel for each host class
+	// Detach all hosts in parallel
 	var wg sync.WaitGroup
-	resultErrors := make(chan error, len(bareMetalCluster.Status.HostSets))
+	results := make(chan hostOperationResult, len(currentHosts))
 	ctx = context.WithValue(ctx, contextKey("mutex"), &sync.Mutex{})
+	hostClassToCurrentHostSetSize := map[string]int{}
 
-	for _, hostSet := range bareMetalCluster.Status.HostSets {
+	for _, host := range currentHosts {
+		hostClassToCurrentHostSetSize[host.HostClass]++
 		wg.Add(1)
-		go func(hostSet v1alpha1.HostSet) {
+		go func(host inventory.Host) {
 			defer wg.Done()
-			hosts, err := r.InventoryClient.GetHosts(
-				ctx,
-				hostSet.HostClass,
-				hostSet.Size,
-				bareMetalCluster.Status.MatchType,
-				string(bareMetalCluster.UID),
-			)
-			if err != nil {
-				log.Error(err, "Failed to get hosts from inventory during deletion")
-				bareMetalCluster.SetStatusCondition(
-					v1alpha1.BareMetalClusterConditionTypeHostsReady,
-					metav1.ConditionFalse,
-					v1alpha1.BareMetalClusterReasonInventoryServiceFailed,
-					"Failed to get hosts from inventory during deletion",
-				)
-				resultErrors <- err
-				return
-			}
-
-			err = r.setHostsAttachment(
+			err := r.unmarkAndDetachHost(
 				ctx,
 				bareMetalCluster,
-				hosts,
-				"",
+				host,
 				hostClassToCurrentHostSetSize,
 			)
-			if err != nil {
-				resultErrors <- err
-				return
+			results <- hostOperationResult{
+				Host:   host,
+				Result: ctrl.Result{},
+				Err:    err,
 			}
-		}(hostSet)
+		}(host)
 	}
 	wg.Wait()
 
 	// need to update HostSets even on failure
 	updatedHostSets := make([]v1alpha1.HostSet, 0, len(hostClassToCurrentHostSetSize))
 	for hostClass, size := range hostClassToCurrentHostSetSize {
+		if size <= 0 {
+			continue
+		}
 		updatedHostSets = append(updatedHostSets, v1alpha1.HostSet{
 			HostClass: hostClass,
 			Size:      size,
@@ -383,12 +377,18 @@ func (r *BareMetalClusterReconciler) handleDeletion(ctx context.Context, bareMet
 	}
 	bareMetalCluster.Status.HostSets = updatedHostSets
 
-	close(resultErrors)
-	for err = range resultErrors {
-		log.Error(err, "Failed to detach host during deletion")
-	}
-	if err != nil {
-		return err
+	close(results)
+	for result := range results {
+		if result.Err != nil {
+			log.Info("Failed to delete/detach host-" + result.Host.NodeId)
+			bareMetalCluster.SetStatusCondition(
+				v1alpha1.BareMetalClusterConditionTypeHostsReady,
+				metav1.ConditionFalse,
+				v1alpha1.BareMetalClusterReasonHostOperationFailed,
+				"Failed to delete/detach host",
+			)
+			return result.Err
+		}
 	}
 
 	log.Info("Successfully deleted cluster")
@@ -399,6 +399,65 @@ func (r *BareMetalClusterReconciler) handleDeletion(ctx context.Context, bareMet
 	}
 
 	return nil
+}
+
+// syncWithInventory compares the desired and current host allocations and returns the deltas
+func (r *BareMetalClusterReconciler) syncWithInventory(
+	ctx context.Context,
+	bareMetalCluster *v1alpha1.BareMetalCluster,
+) (map[string]int, map[string]int, map[string][]inventory.Host, bool, error) {
+	log := logf.FromContext(ctx)
+
+	currentHosts, err := r.InventoryClient.GetHosts(ctx, string(bareMetalCluster.UID))
+	if err != nil {
+		log.Error(err, "Failed to get hosts from inventory")
+		bareMetalCluster.SetStatusCondition(
+			v1alpha1.BareMetalClusterConditionTypeHostsReady,
+			metav1.ConditionFalse,
+			v1alpha1.BareMetalClusterReasonInventoryServiceFailed,
+			"Failed to get hosts from inventory",
+		)
+		return nil, nil, nil, false, err
+	}
+
+	// Group current hosts by hostClass for detachment later
+	hostClassToCurrentHosts := map[string][]inventory.Host{}
+	hostClassToCurrentHostSetSize := map[string]int{}
+	for _, host := range currentHosts {
+		hostClassToCurrentHosts[host.HostClass] = append(hostClassToCurrentHosts[host.HostClass], host)
+		hostClassToCurrentHostSetSize[host.HostClass] += 1
+	}
+
+	// hostClassToHostSetDelta is never written to after init-ing it, so we dont need sync.Map
+	hostClassToHostSetDelta := map[string]int{}
+	hostClassToHostsToDetach := map[string][]inventory.Host{}
+	requiresUpdate := false
+
+	// Calculate delta for each hostSet in spec
+	for _, hostSet := range bareMetalCluster.Spec.HostSets {
+		currentCount := hostClassToCurrentHostSetSize[hostSet.HostClass]
+		delta := hostSet.Size - currentCount
+		hostClassToHostSetDelta[hostSet.HostClass] = delta
+		if delta != 0 {
+			requiresUpdate = true
+		}
+		if delta < 0 {
+			hostsToDetach := hostClassToCurrentHosts[hostSet.HostClass][hostSet.Size:]
+			hostClassToHostsToDetach[hostSet.HostClass] = hostsToDetach
+		}
+	}
+
+	// Set negative delta for hostSets not in spec
+	for hostClass, hosts := range hostClassToCurrentHosts {
+		if _, ok := hostClassToHostSetDelta[hostClass]; ok {
+			continue
+		}
+		hostClassToHostSetDelta[hostClass] = -len(hosts)
+		hostClassToHostsToDetach[hostClass] = hosts
+		requiresUpdate = true
+	}
+
+	return hostClassToHostSetDelta, hostClassToCurrentHostSetSize, hostClassToHostsToDetach, requiresUpdate, nil
 }
 
 func (r *BareMetalClusterReconciler) verifyAvailableHosts(
@@ -418,10 +477,10 @@ func (r *BareMetalClusterReconciler) verifyAvailableHosts(
 
 		hosts, err := r.InventoryClient.GetHosts(
 			ctx,
-			hostClass,
-			delta,
-			bareMetalCluster.Spec.MatchType,
 			"",
+			inventory.WithHostClass(hostClass),
+			inventory.WithCount(delta),
+			inventory.WithMatchType(bareMetalCluster.Spec.MatchType),
 		)
 		if err != nil {
 			log.Error(err, "Failed to get hosts from inventory")
@@ -435,8 +494,7 @@ func (r *BareMetalClusterReconciler) verifyAvailableHosts(
 		}
 		if len(hosts) < delta {
 			err := errors.New("insufficient hosts")
-			log.Error(
-				err,
+			log.Info(
 				"There are not enough available hosts in the inventory",
 				"host class", hostClass,
 				"desired additional hosts", delta,
@@ -459,235 +517,154 @@ func (r *BareMetalClusterReconciler) verifyAvailableHosts(
 	return hostClassToAvailableHosts, nil
 }
 
-func (r *BareMetalClusterReconciler) setHostsAttachment(
-	ctx context.Context,
-	bareMetalCluster *v1alpha1.BareMetalCluster,
-	hosts []inventory.Host,
-	clusterId string,
-	hostClassToCurrentHostSetSize map[string]int,
-) error {
-	var wg sync.WaitGroup
-	resultErrors := make(chan error, len(hosts))
-	if clusterId == "" {
-		for i := range hosts {
-			wg.Add(1)
-			go func(i int) {
-				defer wg.Done()
-				err := r.unmarkAndDetachHost(
-					ctx,
-					bareMetalCluster,
-					hosts[i],
-					hostClassToCurrentHostSetSize,
-				)
-				if err != nil {
-					resultErrors <- err
-				}
-			}(i)
-		}
-	} else {
-		for i := range hosts {
-			wg.Add(1)
-			go func(i int) {
-				defer wg.Done()
-				err := r.markAndAttachHost(
-					ctx,
-					bareMetalCluster,
-					hosts[i],
-					clusterId,
-					hostClassToCurrentHostSetSize,
-				)
-				if err != nil {
-					resultErrors <- err
-				}
-			}(i)
-		}
-	}
-	wg.Wait()
-	close(resultErrors)
-
-	// return the first error encountered
-	for err := range resultErrors {
-		return err
-	}
-
-	return nil
-}
-
 func (r *BareMetalClusterReconciler) markAndAttachHost(
 	ctx context.Context,
 	bareMetalCluster *v1alpha1.BareMetalCluster,
-	host inventory.Host,
-	clusterId string,
+	inventoryHost inventory.Host,
 	hostClassToCurrentHostSetSize map[string]int,
-) error {
+) (ctrl.Result, error) {
 	log := logf.FromContext(ctx).V(1)
 	ctx = logf.IntoContext(ctx, log)
 
-	matchType, _ := host.Extra["matchType"].(string)
+	clusterId := string(bareMetalCluster.UID)
+	matchType, _ := inventoryHost.Extra["matchType"].(string)
+
+	// check if another cluster currently has this host
+	hostName := fmt.Sprintf("host-%s", inventoryHost.NodeId)
+	hostCR := &v1alpha1.TestHost{}
+	err := r.Get(
+		ctx,
+		client.ObjectKey{
+			Namespace: bareMetalCluster.Namespace,
+			Name:      hostName,
+		},
+		hostCR,
+	)
+	if client.IgnoreNotFound(err) != nil {
+		log.Error(err, "Failed to get Host CR", "hostName", hostName)
+		return ctrl.Result{}, err
+	} else if err == nil {
+		if hostCR.Labels["osac.openshift.io/cluster-id"] == clusterId {
+			log.Info("Host " + hostName + " is already acquired by this cluster")
+			return ctrl.Result{}, nil
+		}
+		err = errors.New("host is already acquired by another cluster")
+		log.Error(err, "Failed to acquire Host", "hostName", hostName)
+		return ctrl.Result{RequeueAfter: time.Second}, nil
+	}
 
 	// mark inventory host as attached
-	hostClass := host.HostClass
-	err := r.InventoryClient.PatchInventoryHostClusterId(ctx, host.NodeId, clusterId)
+	err = r.InventoryClient.PatchInventoryHostClusterId(ctx, inventoryHost.NodeId, clusterId)
 	if err != nil {
-		log.Error(err, "Failed to attach host", "NodeId", host.NodeId)
-		bareMetalCluster.SetStatusCondition(
-			v1alpha1.BareMetalClusterConditionTypeHostsReady,
-			metav1.ConditionFalse,
-			v1alpha1.BareMetalClusterReasonInventoryServiceFailed,
-			"Failed to attach some hosts",
-		)
-		return err
-	}
-	mutex := ctx.Value(contextKey("mutex")).(*sync.Mutex)
-	mutex.Lock()
-	hostClassToCurrentHostSetSize[hostClass] += 1
-	mutex.Unlock()
-
-	// create Host CR
-	existingHosts := &v1alpha1.TestHostList{}
-	err = r.List(
-		ctx,
-		existingHosts,
-		client.InNamespace(bareMetalCluster.Namespace),
-		client.MatchingLabels{
-			"osac.openshift.io/node-id": host.NodeId,
-		},
-	)
-	if len(existingHosts.Items) == 0 && client.IgnoreNotFound(err) == nil {
-		// Host doesn't exist so we create it
-		hostName := fmt.Sprintf("host-%s-%s", host.HostClass, rand.String(8))
-		hostCR := &v1alpha1.TestHost{
-			ObjectMeta: metav1.ObjectMeta{
-				Name:      hostName,
-				Namespace: bareMetalCluster.Namespace,
-				Labels: client.MatchingLabels{
-					"osac.openshift.io/cluster-id": string(bareMetalCluster.UID),
-					"osac.openshift.io/node-id":    host.NodeId,
-					"osac.openshift.io/host-class": host.HostClass,
-				},
-			},
-			Spec: v1alpha1.TestHostSpec{
-				NodeId:    host.NodeId,
-				MatchType: matchType,
-				HostClass: host.HostClass,
-				Online:    false,
-			},
-		}
-
-		err := controllerutil.SetControllerReference(bareMetalCluster, hostCR, r.Scheme)
-		if err != nil {
-			log.Error(err, "Failed to set controller reference to Host CR", "NodeId", host.NodeId)
-			bareMetalCluster.SetStatusCondition(
-				v1alpha1.BareMetalClusterConditionTypeHostsReady,
-				metav1.ConditionFalse,
-				v1alpha1.BareMetalClusterReasonHostOperationFailed,
-				"Failed to set controller reference to Host CR",
-			)
-		}
-
-		err = r.Create(ctx, hostCR)
-		if err != nil {
-			log.Error(err, "Failed to create Host CR", "NodeId", host.NodeId)
-			bareMetalCluster.SetStatusCondition(
-				v1alpha1.BareMetalClusterConditionTypeHostsReady,
-				metav1.ConditionFalse,
-				v1alpha1.BareMetalClusterReasonHostOperationFailed,
-				"Failed to create Host CR",
-			)
-			return err
-		}
-	} else if len(existingHosts.Items) > 0 {
-		err = errors.New("host CR already exists")
-		log.Error(err, "Failed to create Host CR", "NodeId", host.NodeId)
-		return err
-	} else {
-		// Unexpected error
-		log.Error(err, "Failed to get Host CR", "NodeId", host.NodeId)
-		bareMetalCluster.SetStatusCondition(
-			v1alpha1.BareMetalClusterConditionTypeHostsReady,
-			metav1.ConditionFalse,
-			v1alpha1.BareMetalClusterReasonHostsUnavailable,
-			"Failed to create Host CR",
-		)
-		return err
+		log.Error(err, "Failed to mark host as attached", "NodeId", inventoryHost.NodeId)
+		return ctrl.Result{}, err
 	}
 
+	hostSetUpWorkflow := ""
+	hostTearDownWorkflow := ""
 	registeredProfile, ok := profile.Get(bareMetalCluster.Spec.Profile.Name)
 	if ok {
-		err = r.runWorkflow(ctx, bareMetalCluster, registeredProfile.HostSetUpWorkflow)
-		if err != nil {
-			log.Error(err, "Failed to set up host")
-			return err
-		}
+		hostSetUpWorkflow = registeredProfile.HostSetUpWorkflow.String()
+		hostTearDownWorkflow = registeredProfile.HostTearDownWorkflow.String()
 	}
 
-	log.Info("Successfully set up host", "NodeId", host.NodeId)
+	// create Host CR
+	hostCR = &v1alpha1.TestHost{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      hostName,
+			Namespace: bareMetalCluster.Namespace,
+			Labels: client.MatchingLabels{
+				"osac.openshift.io/cluster-id": clusterId,
+				"osac.openshift.io/node-id":    inventoryHost.NodeId,
+				"osac.openshift.io/host-class": inventoryHost.HostClass,
+			},
+		},
+		Spec: v1alpha1.TestHostSpec{
+			NodeId:           inventoryHost.NodeId,
+			MatchType:        matchType,
+			HostClass:        inventoryHost.HostClass,
+			Online:           false,
+			SetUpWorkflow:    hostSetUpWorkflow,
+			TearDownWorkflow: hostTearDownWorkflow,
+		},
+	}
+	err = controllerutil.SetControllerReference(bareMetalCluster, hostCR, r.Scheme)
+	if err != nil {
+		log.Error(err, "Failed to set controller reference to Host CR", "NodeId", inventoryHost.NodeId)
+		return ctrl.Result{}, err
+	}
+	err = r.Create(ctx, hostCR)
+	if err != nil {
+		log.Error(err, "Failed to create Host CR", "NodeId", inventoryHost.NodeId)
+		return ctrl.Result{}, err
+	}
 
-	return nil
+	mutex := ctx.Value(contextKey("mutex")).(*sync.Mutex)
+	mutex.Lock()
+	hostClassToCurrentHostSetSize[inventoryHost.HostClass]++
+	mutex.Unlock()
+
+	log.Info("Successfully acquired host", "NodeId", inventoryHost.NodeId)
+
+	return ctrl.Result{}, nil
 }
 
 func (r *BareMetalClusterReconciler) unmarkAndDetachHost(
 	ctx context.Context,
 	bareMetalCluster *v1alpha1.BareMetalCluster,
-	host inventory.Host,
+	inventoryHost inventory.Host,
 	hostClassToCurrentHostSetSize map[string]int,
 ) error {
 	log := logf.FromContext(ctx).V(1)
 	ctx = logf.IntoContext(ctx, log)
 
-	registeredProfile, ok := profile.Get(bareMetalCluster.Spec.Profile.Name)
-	if ok {
-		err := r.runWorkflow(ctx, bareMetalCluster, registeredProfile.HostTearDownWorkflow)
-		if err != nil {
-			log.Error(err, "Failed to tear down hosts")
-			return err
-		}
-	}
-	var err error
+	clusterId := string(bareMetalCluster.UID)
 
-	// delete Host CRs
-	err = r.DeleteAllOf(
+	// check if another cluster currently has this host
+	hostName := fmt.Sprintf("host-%s", inventoryHost.NodeId)
+	hostCR := &v1alpha1.TestHost{}
+	err := r.Get(
 		ctx,
-		&v1alpha1.TestHost{},
-		client.InNamespace(bareMetalCluster.Namespace),
-		client.MatchingLabels{
-			"osac.openshift.io/cluster-id": string(bareMetalCluster.UID),
-			"osac.openshift.io/node-id":    host.NodeId,
+		client.ObjectKey{
+			Namespace: bareMetalCluster.Namespace,
+			Name:      hostName,
 		},
+		hostCR,
 	)
 	if client.IgnoreNotFound(err) != nil {
-		log.Error(err, "Failed to delete Host CR", "NodeId", host.NodeId)
-		bareMetalCluster.SetStatusCondition(
-			v1alpha1.BareMetalClusterConditionTypeHostsReady,
-			metav1.ConditionFalse,
-			v1alpha1.BareMetalClusterReasonHostOperationFailed,
-			"Failed to delete Host CR",
-		)
+		log.Error(err, "Failed to get Host CR", "hostName", hostName)
+		return err
+	} else if err == nil && hostCR.Labels["osac.openshift.io/cluster-id"] != clusterId {
+		log.Info("Host is attached to a different cluster")
+		return nil
+	}
+
+	// delete Host CR
+	err = r.Delete(ctx, hostCR)
+	if client.IgnoreNotFound(err) != nil {
+		log.Error(err, "Failed to delete Host CR", "hostName", hostName)
 		return err
 	}
 
 	// mark inventory host as detached
-	hostClass := host.HostClass
-	err = r.InventoryClient.PatchInventoryHostClusterId(ctx, host.NodeId, "")
+	err = r.InventoryClient.PatchInventoryHostClusterId(ctx, inventoryHost.NodeId, "")
 	if err != nil {
-		log.Error(err, "Failed to free host", "NodeId", host.NodeId)
+		log.Error(err, "Failed to free host", "NodeId", inventoryHost.NodeId)
 		bareMetalCluster.SetStatusCondition(
 			v1alpha1.BareMetalClusterConditionTypeHostsReady,
 			metav1.ConditionFalse,
 			v1alpha1.BareMetalClusterReasonInventoryServiceFailed,
-			"Failed to free some hosts",
+			"Failed to free host",
 		)
 		return err
 	}
+
 	mutex := ctx.Value(contextKey("mutex")).(*sync.Mutex)
 	mutex.Lock()
-	hostClassToCurrentHostSetSize[hostClass] -= 1
-	if hostClassToCurrentHostSetSize[hostClass] == 0 {
-		delete(hostClassToCurrentHostSetSize, hostClass)
-	}
+	hostClassToCurrentHostSetSize[inventoryHost.HostClass]--
 	mutex.Unlock()
 
-	log.Info("Successfully detached host", "NodeId", host.NodeId)
+	log.Info("Successfully detached host", "NodeId", inventoryHost.NodeId)
 
 	return nil
 }
