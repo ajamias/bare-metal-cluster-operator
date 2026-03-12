@@ -48,11 +48,17 @@ spec:
                 type: string
               online:
                 type: boolean
+              setUpWorkflow:
+                type: string
+              tearDownWorkflow:
+                type: string
             required:
             - hostClass
             - matchType
             - nodeId
             - online
+            - setUpWorkflow
+            - tearDownWorkflow
             type: object
         type: object
     served: true

@@ -58,14 +58,50 @@ func NewInventoryClient(httpClient *http.Client, inventoryURL *url.URL, manageme
 	}
 }
 
+// getHostsOptions holds configuration for GetHosts
+type getHostsOptions struct {
+	hostClass *string
+	matchType *string
+	count     int
+}
+
+// GetHostsOption is a function that configures getHostsOptions
+type GetHostsOption func(*getHostsOptions)
+
+// WithHostClass sets the host class filter
+func WithHostClass(hostClass string) GetHostsOption {
+	return func(o *getHostsOptions) {
+		o.hostClass = &hostClass
+	}
+}
+
+// WithMatchType sets the match type filter
+func WithMatchType(matchType string) GetHostsOption {
+	return func(o *getHostsOptions) {
+		o.matchType = &matchType
+	}
+}
+
+// WithCount sets the maximum number of hosts to return
+func WithCount(count int) GetHostsOption {
+	return func(o *getHostsOptions) {
+		if count < 0 {
+			count = 0
+		}
+		o.count = count
+	}
+}
+
 // GetHosts retrieves hosts from the inventory service
 func (c *InventoryClient) GetHosts(
 	ctx context.Context,
-	hostClass string,
-	count int,
-	matchType string,
 	clusterId string,
+	opts ...GetHostsOption,
 ) ([]Host, error) {
+	options := &getHostsOptions{}
+	for _, opt := range opts {
+		opt(options)
+	}
 	log := logf.FromContext(ctx).V(1)
 	ctx = logf.IntoContext(ctx, log)
 
@@ -116,6 +152,10 @@ func (c *InventoryClient) GetHosts(
 	// assume filters don't work on the inventory
 	hosts := []Host{}
 	for _, host := range hostResponse.Hosts {
+		if options.hostClass != nil && host.HostClass != *options.hostClass {
+			continue
+		}
+
 		hostMatchType := ""
 		hostClusterId := ""
 		if host.Extra != nil {
@@ -127,13 +167,17 @@ func (c *InventoryClient) GetHosts(
 			}
 		}
 
-		if host.HostClass == hostClass &&
-			hostMatchType == matchType &&
-			hostClusterId == clusterId {
-			hosts = append(hosts, host)
+		if options.matchType != nil && hostMatchType != *options.matchType {
+			continue
 		}
 
-		if count > 0 && len(hosts) >= count {
+		if hostClusterId != clusterId {
+			continue
+		}
+
+		hosts = append(hosts, host)
+
+		if options.count > 0 && len(hosts) >= options.count {
 			break
 		}
 	}
