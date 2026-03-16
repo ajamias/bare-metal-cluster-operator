@@ -21,8 +21,8 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
-// BareMetalClusterSpec defines the desired state of BareMetalCluster.
-type BareMetalClusterSpec struct {
+// BareMetalPoolSpec defines the desired state of BareMetalPool.
+type BareMetalPoolSpec struct {
 	// MatchType specifies the criteria for selecting hosts
 	// +kubebuilder:validation:Required
 	// +kubebuilder:validation:Enum=baremetal;agent
@@ -41,8 +41,8 @@ type BareMetalClusterSpec struct {
 	Profile ProfileSpec `json:"profile,omitempty"`
 }
 
-// BareMetalClusterStatus defines the observed state of BareMetalCluster.
-type BareMetalClusterStatus struct {
+// BareMetalPoolStatus defines the observed state of BareMetalPool.
+type BareMetalPoolStatus struct {
 	// MatchType specifies the criteria for selecting hosts
 	// +kubebuilder:validation:Required
 	// +kubebuilder:validation:Enum=baremetal;agent
@@ -58,7 +58,7 @@ type BareMetalClusterStatus struct {
 	// +kubebuilder:validation:Optional
 	LastUpdated *metav1.Time `json:"lastUpdated,omitempty"`
 
-	// Conditions represent the latest available observations of the BareMetalCluster state
+	// Conditions represent the latest available observations of the BareMetalPool state
 	// +kubebuilder:validation:Optional
 	Conditions []metav1.Condition `json:"conditions,omitempty" patchStrategy:"merge" patchMergeKey:"type" protobuf:"bytes,1,rep,name=conditions"`
 }
@@ -93,24 +93,24 @@ type ProfileSpec struct {
 // +kubebuilder:printcolumn:name="Type",type="string",JSONPath=".spec.matchType"
 // +kubebuilder:printcolumn:name="Age",type="date",JSONPath=".metadata.creationTimestamp"
 
-// BareMetalCluster is the Schema for the baremetalclusters API.
-type BareMetalCluster struct {
+// BareMetalPool is the Schema for the baremetalpools API.
+type BareMetalPool struct {
 	metav1.TypeMeta   `json:",inline"`
 	metav1.ObjectMeta `json:"metadata,omitempty"`
 
-	Spec   BareMetalClusterSpec   `json:"spec,omitempty"`
-	Status BareMetalClusterStatus `json:"status,omitempty"`
+	Spec   BareMetalPoolSpec   `json:"spec,omitempty"`
+	Status BareMetalPoolStatus `json:"status,omitempty"`
 }
 
 // +kubebuilder:object:root=true
 
-// BareMetalClusterList contains a list of BareMetalCluster.
-type BareMetalClusterList struct {
+// BareMetalPoolList contains a list of BareMetalPool.
+type BareMetalPoolList struct {
 	metav1.TypeMeta `json:",inline"`
 	metav1.ListMeta `json:"metadata,omitempty"`
-	Items           []BareMetalCluster `json:"items"`
+	Items           []BareMetalPool `json:"items"`
 }
 
 func init() {
-	SchemeBuilder.Register(&BareMetalCluster{}, &BareMetalClusterList{})
+	SchemeBuilder.Register(&BareMetalPool{}, &BareMetalPoolList{})
 }

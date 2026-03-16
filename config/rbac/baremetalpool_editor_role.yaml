@@ -11,12 +11,12 @@ metadata:
   labels:
     app.kubernetes.io/name: bare-metal-operator
     app.kubernetes.io/managed-by: kustomize
-  name: baremetalcluster-editor-role
+  name: baremetalpool-editor-role
 rules:
 - apiGroups:
   - osac.openshift.io
   resources:
-  - baremetalclusters
+  - baremetalpools
   verbs:
   - create
   - delete
@@ -28,6 +28,6 @@ rules:
 - apiGroups:
   - osac.openshift.io
   resources:
-  - baremetalclusters/status
+  - baremetalpools/status
   verbs:
   - get

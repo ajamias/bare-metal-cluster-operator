@@ -29,6 +29,7 @@ import (
 	// to ensure that exec-entrypoint and run can make use of them.
 	_ "k8s.io/client-go/plugin/pkg/client/auth"
 
+	hostv1alpha1 "github.com/DanNiESh/host-operator/api/v1alpha1"
 	tektonv1 "github.com/tektoncd/pipeline/pkg/apis/pipeline/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
@@ -57,6 +58,7 @@ func init() {
 	utilruntime.Must(clientgoscheme.AddToScheme(scheme))
 
 	utilruntime.Must(osacopenshiftiov1alpha1.AddToScheme(scheme))
+	utilruntime.Must(hostv1alpha1.AddToScheme(scheme))
 	utilruntime.Must(tektonv1.AddToScheme(scheme))
 	// +kubebuilder:scaffold:scheme
 }
@@ -265,12 +267,12 @@ func main() {
 
 	inventoryClient := inventory.NewInventoryClient(&http.Client{}, osacInventoryUrl, osacManagementUrl, authToken)
 
-	if err := (&controller.BareMetalClusterReconciler{
+	if err := (&controller.BareMetalPoolReconciler{
 		Client:          mgr.GetClient(),
 		Scheme:          mgr.GetScheme(),
 		InventoryClient: inventoryClient,
 	}).SetupWithManager(mgr); err != nil {
-		setupLog.Error(err, "unable to create controller", "controller", "BareMetalCluster")
+		setupLog.Error(err, "unable to create controller", "controller", "BareMetalPool")
 		os.Exit(1)
 	}
 	// +kubebuilder:scaffold:builder

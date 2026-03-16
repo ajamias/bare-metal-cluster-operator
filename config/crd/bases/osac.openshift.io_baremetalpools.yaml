@@ -4,17 +4,17 @@ kind: CustomResourceDefinition
 metadata:
   annotations:
     controller-gen.kubebuilder.io/version: v0.18.0
-  name: baremetalclusters.osac.openshift.io
+  name: baremetalpools.osac.openshift.io
 spec:
   group: osac.openshift.io
   names:
-    kind: BareMetalCluster
-    listKind: BareMetalClusterList
-    plural: baremetalclusters
+    kind: BareMetalPool
+    listKind: BareMetalPoolList
+    plural: baremetalpools
     shortNames:
     - cr
     - creq
-    singular: baremetalcluster
+    singular: baremetalpool
   scope: Namespaced
   versions:
   - additionalPrinterColumns:
@@ -33,7 +33,7 @@ spec:
     name: v1alpha1
     schema:
       openAPIV3Schema:
-        description: BareMetalCluster is the Schema for the baremetalclusters API.
+        description: BareMetalPool is the Schema for the baremetalpools API.
         properties:
           apiVersion:
             description: |-
@@ -53,7 +53,7 @@ spec:
           metadata:
             type: object
           spec:
-            description: BareMetalClusterSpec defines the desired state of BareMetalCluster.
+            description: BareMetalPoolSpec defines the desired state of BareMetalPool.
             properties:
               hostSets:
                 description: HostSets defines the number of hosts needed for each
@@ -119,11 +119,11 @@ spec:
             - matchType
             type: object
           status:
-            description: BareMetalClusterStatus defines the observed state of BareMetalCluster.
+            description: BareMetalPoolStatus defines the observed state of BareMetalPool.
             properties:
               conditions:
                 description: Conditions represent the latest available observations
-                  of the BareMetalCluster state
+                  of the BareMetalPool state
                 items:
                   description: Condition contains details for one aspect of the current
                     state of this API Resource.

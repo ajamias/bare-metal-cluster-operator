@@ -40,14 +40,14 @@ import (
 	"github.com/ajamias/bare-metal-operator/internal/profile"
 )
 
-// BareMetalClusterReconciler reconciles a BareMetalCluster object
-type BareMetalClusterReconciler struct {
+// BareMetalPoolReconciler reconciles a BareMetalPool object
+type BareMetalPoolReconciler struct {
 	client.Client
 	Scheme          *runtime.Scheme
 	InventoryClient *inventory.InventoryClient
 }
 
-const BareMetalClusterFinalizer = "osac.openshift.io/cluster-request"
+const BareMetalPoolFinalizer = "osac.openshift.io/cluster-request"
 
 type contextKey string
 
@@ -57,19 +57,19 @@ type hostOperationResult struct {
 	Err    error
 }
 
-// +kubebuilder:rbac:groups=osac.openshift.io,resources=baremetalclusters,verbs=get;list;watch;create;update;patch;delete
-// +kubebuilder:rbac:groups=osac.openshift.io,resources=baremetalclusters/status,verbs=get;update;patch
-// +kubebuilder:rbac:groups=osac.openshift.io,resources=baremetalclusters/finalizers,verbs=update
+// +kubebuilder:rbac:groups=osac.openshift.io,resources=baremetalpools,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups=osac.openshift.io,resources=baremetalpools/status,verbs=get;update;patch
+// +kubebuilder:rbac:groups=osac.openshift.io,resources=baremetalpools/finalizers,verbs=update
 // +kubebuilder:rbac:groups=osac.openshift.io,resources=hosts,verbs=get;list;watch;create;delete;deletecollection
 // +kubebuilder:rbac:groups=tekton.dev,resources=pipelineruns,verbs=get;list;watch;create;update;patch;delete
 
 // Reconcile is part of the main kubernetes reconciliation loop which aims to
 // move the current state of the cluster closer to the desired state.
-func (r *BareMetalClusterReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
+func (r *BareMetalPoolReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	log := logf.FromContext(ctx)
 
-	bareMetalCluster := &v1alpha1.BareMetalCluster{}
-	err := r.Get(ctx, req.NamespacedName, bareMetalCluster)
+	bareMetalPool := &v1alpha1.BareMetalPool{}
+	err := r.Get(ctx, req.NamespacedName, bareMetalPool)
 	if err != nil {
 		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
@@ -78,47 +78,47 @@ func (r *BareMetalClusterReconciler) Reconcile(ctx context.Context, req ctrl.Req
 		"namespacedName",
 		req.NamespacedName,
 		"name",
-		bareMetalCluster.Name,
+		bareMetalPool.Name,
 	)
 
-	oldstatus := bareMetalCluster.Status.DeepCopy()
+	oldstatus := bareMetalPool.Status.DeepCopy()
 
 	var result ctrl.Result
-	if !bareMetalCluster.DeletionTimestamp.IsZero() {
-		err = r.handleDeletion(ctx, bareMetalCluster)
+	if !bareMetalPool.DeletionTimestamp.IsZero() {
+		err = r.handleDeletion(ctx, bareMetalPool)
 		result = ctrl.Result{}
 	} else {
-		result, err = r.handleUpdate(ctx, bareMetalCluster)
+		result, err = r.handleUpdate(ctx, bareMetalPool)
 	}
 
-	if !equality.Semantic.DeepEqual(bareMetalCluster.Status, *oldstatus) {
+	if !equality.Semantic.DeepEqual(bareMetalPool.Status, *oldstatus) {
 		status := metav1.ConditionFalse
 		hostsReason := meta.FindStatusCondition(
-			bareMetalCluster.Status.Conditions,
-			v1alpha1.BareMetalClusterConditionTypeHostsReady,
+			bareMetalPool.Status.Conditions,
+			v1alpha1.BareMetalPoolConditionTypeHostsReady,
 		).Reason
 
 		var reason string
 		switch hostsReason {
-		case v1alpha1.BareMetalClusterReasonHostsAvailable:
+		case v1alpha1.BareMetalPoolReasonHostsAvailable:
 			status = metav1.ConditionTrue
-			reason = v1alpha1.BareMetalClusterReasonReady
-		case v1alpha1.BareMetalClusterReasonHostsProgressing:
-			reason = v1alpha1.BareMetalClusterReasonProgressing
-		case v1alpha1.BareMetalClusterReasonHostsDeleting:
-			reason = v1alpha1.BareMetalClusterReasonDeleting
+			reason = v1alpha1.BareMetalPoolReasonReady
+		case v1alpha1.BareMetalPoolReasonHostsProgressing:
+			reason = v1alpha1.BareMetalPoolReasonProgressing
+		case v1alpha1.BareMetalPoolReasonHostsDeleting:
+			reason = v1alpha1.BareMetalPoolReasonDeleting
 		default:
-			reason = v1alpha1.BareMetalClusterReasonFailed
+			reason = v1alpha1.BareMetalPoolReasonFailed
 		}
 
-		bareMetalCluster.SetStatusCondition(
-			v1alpha1.BareMetalClusterConditionTypeReady,
+		bareMetalPool.SetStatusCondition(
+			v1alpha1.BareMetalPoolConditionTypeReady,
 			status,
 			reason,
 			hostsReason,
 		)
 
-		statusErr := r.Status().Update(ctx, bareMetalCluster)
+		statusErr := r.Status().Update(ctx, bareMetalPool)
 		if statusErr != nil {
 			return result, statusErr
 		}
@@ -128,36 +128,36 @@ func (r *BareMetalClusterReconciler) Reconcile(ctx context.Context, req ctrl.Req
 }
 
 // SetupWithManager sets up the controller with the Manager.
-func (r *BareMetalClusterReconciler) SetupWithManager(mgr ctrl.Manager) error {
+func (r *BareMetalPoolReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
-		For(&v1alpha1.BareMetalCluster{}).
-		Named("baremetalcluster").
+		For(&v1alpha1.BareMetalPool{}).
+		Named("baremetalpool").
 		Complete(r)
 }
 
-// handleUpdate processes BareMetalCluster creation or specification updates.
-func (r *BareMetalClusterReconciler) handleUpdate(ctx context.Context, bareMetalCluster *v1alpha1.BareMetalCluster) (ctrl.Result, error) {
+// handleUpdate processes BareMetalPool creation or specification updates.
+func (r *BareMetalPoolReconciler) handleUpdate(ctx context.Context, bareMetalPool *v1alpha1.BareMetalPool) (ctrl.Result, error) {
 	log := logf.FromContext(ctx)
-	log.Info("Handling update", "name", bareMetalCluster.Name)
+	log.Info("Handling update", "name", bareMetalPool.Name)
 
-	bareMetalCluster.InitializeStatusConditions()
+	bareMetalPool.InitializeStatusConditions()
 
-	if controllerutil.AddFinalizer(bareMetalCluster, BareMetalClusterFinalizer) {
+	if controllerutil.AddFinalizer(bareMetalPool, BareMetalPoolFinalizer) {
 		// Update should fire another reconcile event, so just return
-		err := r.Update(ctx, bareMetalCluster)
+		err := r.Update(ctx, bareMetalPool)
 		return ctrl.Result{}, err
 	}
 
-	if bareMetalCluster.Status.MatchType == "" {
-		bareMetalCluster.Status.MatchType = bareMetalCluster.Spec.MatchType
+	if bareMetalPool.Status.MatchType == "" {
+		bareMetalPool.Status.MatchType = bareMetalPool.Spec.MatchType
 	}
 
-	if bareMetalCluster.Status.HostSets == nil {
-		bareMetalCluster.Status.HostSets = []v1alpha1.HostSet{}
+	if bareMetalPool.Status.HostSets == nil {
+		bareMetalPool.Status.HostSets = []v1alpha1.HostSet{}
 	}
 
 	// positive delta means add hosts of the HostClass, negative means remove
-	hostClassToHostSetDelta, hostClassToCurrentHostSetSize, hostClassToHostsToDetach, requiresUpdate, err := r.syncWithInventory(ctx, bareMetalCluster)
+	hostClassToHostSetDelta, hostClassToCurrentHostSetSize, hostClassToHostsToDetach, requiresUpdate, err := r.syncWithInventory(ctx, bareMetalPool)
 	if err != nil {
 		log.Error(err, "Failed to sync status with inventory")
 		return ctrl.Result{}, err
@@ -165,16 +165,16 @@ func (r *BareMetalClusterReconciler) handleUpdate(ctx context.Context, bareMetal
 
 	if !requiresUpdate {
 		log.Info("No update required")
-		bareMetalCluster.SetStatusCondition(
-			v1alpha1.BareMetalClusterConditionTypeHostsReady,
+		bareMetalPool.SetStatusCondition(
+			v1alpha1.BareMetalPoolConditionTypeHostsReady,
 			metav1.ConditionTrue,
-			v1alpha1.BareMetalClusterReasonHostsAvailable,
+			v1alpha1.BareMetalPoolReasonHostsAvailable,
 			"Successfully reconciled hosts",
 		)
 		return ctrl.Result{}, nil
 	}
 
-	hostClassToAvailableHosts, err := r.verifyAvailableHosts(ctx, bareMetalCluster, hostClassToHostSetDelta)
+	hostClassToAvailableHosts, err := r.verifyAvailableHosts(ctx, bareMetalPool, hostClassToHostSetDelta)
 	if err != nil {
 		if err.Error() == "insufficient hosts" {
 			log.Info("Insufficient hosts available")
@@ -207,7 +207,7 @@ func (r *BareMetalClusterReconciler) handleUpdate(ctx context.Context, bareMetal
 					// TODO: defer distributedMutex.Unlock(host)
 					result, err := r.markAndAttachHost(
 						ctx,
-						bareMetalCluster,
+						bareMetalPool,
 						host,
 						hostClassToCurrentHostSetSize,
 					)
@@ -227,7 +227,7 @@ func (r *BareMetalClusterReconciler) handleUpdate(ctx context.Context, bareMetal
 					// TODO: defer distributedMutex.Unlock(host)
 					err := r.unmarkAndDetachHost(
 						ctx,
-						bareMetalCluster,
+						bareMetalPool,
 						host,
 						hostClassToCurrentHostSetSize,
 					)
@@ -255,16 +255,16 @@ func (r *BareMetalClusterReconciler) handleUpdate(ctx context.Context, bareMetal
 			Replicas:  replicas,
 		})
 	}
-	bareMetalCluster.Status.HostSets = updatedHostSets
+	bareMetalPool.Status.HostSets = updatedHostSets
 
 	close(results)
 	for result := range results {
 		if !result.Result.IsZero() || result.Err != nil {
 			log.Info("Unsuccessful in updating host-" + result.Host.NodeId)
-			bareMetalCluster.SetStatusCondition(
-				v1alpha1.BareMetalClusterConditionTypeHostsReady,
+			bareMetalPool.SetStatusCondition(
+				v1alpha1.BareMetalPoolConditionTypeHostsReady,
 				metav1.ConditionTrue,
-				v1alpha1.BareMetalClusterReasonHostsAvailable,
+				v1alpha1.BareMetalPoolReasonHostsAvailable,
 				"Failed to attach/detach host",
 			)
 			return result.Result, result.Err
@@ -272,22 +272,22 @@ func (r *BareMetalClusterReconciler) handleUpdate(ctx context.Context, bareMetal
 	}
 
 	log.Info("Successfully reconciled hosts")
-	bareMetalCluster.SetStatusCondition(
-		v1alpha1.BareMetalClusterConditionTypeHostsReady,
+	bareMetalPool.SetStatusCondition(
+		v1alpha1.BareMetalPoolConditionTypeHostsReady,
 		metav1.ConditionTrue,
-		v1alpha1.BareMetalClusterReasonHostsAvailable,
+		v1alpha1.BareMetalPoolReasonHostsAvailable,
 		"Successfully reconciled hosts",
 	)
 
-	registeredProfile, ok := profile.Get(bareMetalCluster.Spec.Profile.Name)
+	registeredProfile, ok := profile.Get(bareMetalPool.Spec.Profile.Name)
 	if ok {
-		err = r.runWorkflow(ctx, bareMetalCluster, registeredProfile.ClusterSetUpWorkflow)
+		err = r.runWorkflow(ctx, bareMetalPool, registeredProfile.ClusterSetUpWorkflow)
 		if err != nil {
 			log.Error(err, "Failed to set up cluster")
-			bareMetalCluster.SetStatusCondition(
-				v1alpha1.BareMetalClusterConditionTypeHostsReady,
+			bareMetalPool.SetStatusCondition(
+				v1alpha1.BareMetalPoolConditionTypeHostsReady,
 				metav1.ConditionFalse,
-				v1alpha1.BareMetalClusterReasonHostOperationFailed,
+				v1alpha1.BareMetalPoolReasonHostOperationFailed,
 				"Failed to set up cluster",
 			)
 			return ctrl.Result{}, err
@@ -299,27 +299,27 @@ func (r *BareMetalClusterReconciler) handleUpdate(ctx context.Context, bareMetal
 	return ctrl.Result{}, nil
 }
 
-// handleDeletion handles the cleanup when a BareMetalCluster is being deleted
-func (r *BareMetalClusterReconciler) handleDeletion(ctx context.Context, bareMetalCluster *v1alpha1.BareMetalCluster) error {
+// handleDeletion handles the cleanup when a BareMetalPool is being deleted
+func (r *BareMetalPoolReconciler) handleDeletion(ctx context.Context, bareMetalPool *v1alpha1.BareMetalPool) error {
 	log := logf.FromContext(ctx)
-	log.Info("Handling delete", "name", bareMetalCluster.Name)
+	log.Info("Handling delete", "name", bareMetalPool.Name)
 
-	bareMetalCluster.SetStatusCondition(
-		v1alpha1.BareMetalClusterConditionTypeHostsReady,
+	bareMetalPool.SetStatusCondition(
+		v1alpha1.BareMetalPoolConditionTypeHostsReady,
 		metav1.ConditionFalse,
-		v1alpha1.BareMetalClusterReasonHostsDeleting,
-		"BareMetalCluster's hosts are being freed",
+		v1alpha1.BareMetalPoolReasonHostsDeleting,
+		"BareMetalPool's hosts are being freed",
 	)
 
-	registeredProfile, ok := profile.Get(bareMetalCluster.Spec.Profile.Name)
+	registeredProfile, ok := profile.Get(bareMetalPool.Spec.Profile.Name)
 	if ok {
-		err := r.runWorkflow(ctx, bareMetalCluster, registeredProfile.ClusterTearDownWorkflow)
+		err := r.runWorkflow(ctx, bareMetalPool, registeredProfile.ClusterTearDownWorkflow)
 		if err != nil {
 			log.Error(err, "Failed to tear down cluster")
-			bareMetalCluster.SetStatusCondition(
-				v1alpha1.BareMetalClusterConditionTypeHostsReady,
+			bareMetalPool.SetStatusCondition(
+				v1alpha1.BareMetalPoolConditionTypeHostsReady,
 				metav1.ConditionFalse,
-				v1alpha1.BareMetalClusterReasonHostOperationFailed,
+				v1alpha1.BareMetalPoolReasonHostOperationFailed,
 				"Failed to tear down cluster",
 			)
 			return err
@@ -327,13 +327,13 @@ func (r *BareMetalClusterReconciler) handleDeletion(ctx context.Context, bareMet
 	}
 
 	// Get all hosts currently assigned to this cluster
-	currentHosts, err := r.InventoryClient.GetHosts(ctx, string(bareMetalCluster.UID))
+	currentHosts, err := r.InventoryClient.GetHosts(ctx, string(bareMetalPool.UID))
 	if err != nil {
 		log.Error(err, "Failed to get hosts from inventory during deletion")
-		bareMetalCluster.SetStatusCondition(
-			v1alpha1.BareMetalClusterConditionTypeHostsReady,
+		bareMetalPool.SetStatusCondition(
+			v1alpha1.BareMetalPoolConditionTypeHostsReady,
 			metav1.ConditionFalse,
-			v1alpha1.BareMetalClusterReasonInventoryServiceFailed,
+			v1alpha1.BareMetalPoolReasonInventoryServiceFailed,
 			"Failed to get hosts from inventory during deletion",
 		)
 		return err
@@ -352,7 +352,7 @@ func (r *BareMetalClusterReconciler) handleDeletion(ctx context.Context, bareMet
 			defer wg.Done()
 			err := r.unmarkAndDetachHost(
 				ctx,
-				bareMetalCluster,
+				bareMetalPool,
 				host,
 				hostClassToCurrentHostSetSize,
 			)
@@ -376,16 +376,16 @@ func (r *BareMetalClusterReconciler) handleDeletion(ctx context.Context, bareMet
 			Replicas:  replicas,
 		})
 	}
-	bareMetalCluster.Status.HostSets = updatedHostSets
+	bareMetalPool.Status.HostSets = updatedHostSets
 
 	close(results)
 	for result := range results {
 		if result.Err != nil {
 			log.Info("Failed to delete/detach host-" + result.Host.NodeId)
-			bareMetalCluster.SetStatusCondition(
-				v1alpha1.BareMetalClusterConditionTypeHostsReady,
+			bareMetalPool.SetStatusCondition(
+				v1alpha1.BareMetalPoolConditionTypeHostsReady,
 				metav1.ConditionFalse,
-				v1alpha1.BareMetalClusterReasonHostOperationFailed,
+				v1alpha1.BareMetalPoolReasonHostOperationFailed,
 				"Failed to delete/detach host",
 			)
 			return result.Err
@@ -393,9 +393,9 @@ func (r *BareMetalClusterReconciler) handleDeletion(ctx context.Context, bareMet
 	}
 
 	log.Info("Successfully deleted cluster")
-	if controllerutil.RemoveFinalizer(bareMetalCluster, BareMetalClusterFinalizer) {
+	if controllerutil.RemoveFinalizer(bareMetalPool, BareMetalPoolFinalizer) {
 		// Update should fire another reconcile event, so just return
-		err := r.Update(ctx, bareMetalCluster)
+		err := r.Update(ctx, bareMetalPool)
 		return err
 	}
 
@@ -403,19 +403,19 @@ func (r *BareMetalClusterReconciler) handleDeletion(ctx context.Context, bareMet
 }
 
 // syncWithInventory compares the desired and current host allocations and returns the deltas
-func (r *BareMetalClusterReconciler) syncWithInventory(
+func (r *BareMetalPoolReconciler) syncWithInventory(
 	ctx context.Context,
-	bareMetalCluster *v1alpha1.BareMetalCluster,
+	bareMetalPool *v1alpha1.BareMetalPool,
 ) (map[string]int, map[string]int, map[string][]inventory.Host, bool, error) {
 	log := logf.FromContext(ctx)
 
-	currentHosts, err := r.InventoryClient.GetHosts(ctx, string(bareMetalCluster.UID))
+	currentHosts, err := r.InventoryClient.GetHosts(ctx, string(bareMetalPool.UID))
 	if err != nil {
 		log.Error(err, "Failed to get hosts from inventory")
-		bareMetalCluster.SetStatusCondition(
-			v1alpha1.BareMetalClusterConditionTypeHostsReady,
+		bareMetalPool.SetStatusCondition(
+			v1alpha1.BareMetalPoolConditionTypeHostsReady,
 			metav1.ConditionFalse,
-			v1alpha1.BareMetalClusterReasonInventoryServiceFailed,
+			v1alpha1.BareMetalPoolReasonInventoryServiceFailed,
 			"Failed to get hosts from inventory",
 		)
 		return nil, nil, nil, false, err
@@ -435,7 +435,7 @@ func (r *BareMetalClusterReconciler) syncWithInventory(
 	requiresUpdate := false
 
 	// Calculate delta for each hostSet in spec
-	for _, hostSet := range bareMetalCluster.Spec.HostSets {
+	for _, hostSet := range bareMetalPool.Spec.HostSets {
 		currentCount := hostClassToCurrentHostSetSize[hostSet.HostClass]
 		delta := hostSet.Replicas - currentCount
 		hostClassToHostSetDelta[hostSet.HostClass] = delta
@@ -461,9 +461,9 @@ func (r *BareMetalClusterReconciler) syncWithInventory(
 	return hostClassToHostSetDelta, hostClassToCurrentHostSetSize, hostClassToHostsToDetach, requiresUpdate, nil
 }
 
-func (r *BareMetalClusterReconciler) verifyAvailableHosts(
+func (r *BareMetalPoolReconciler) verifyAvailableHosts(
 	ctx context.Context,
-	bareMetalCluster *v1alpha1.BareMetalCluster,
+	bareMetalPool *v1alpha1.BareMetalPool,
 	hostClassToHostSetDelta map[string]int,
 ) (map[string][]inventory.Host, error) {
 	log := logf.FromContext(ctx).V(1)
@@ -481,14 +481,14 @@ func (r *BareMetalClusterReconciler) verifyAvailableHosts(
 			"",
 			inventory.WithHostClass(hostClass),
 			inventory.WithCount(delta),
-			inventory.WithMatchType(bareMetalCluster.Spec.MatchType),
+			inventory.WithMatchType(bareMetalPool.Spec.MatchType),
 		)
 		if err != nil {
 			log.Error(err, "Failed to get hosts from inventory")
-			bareMetalCluster.SetStatusCondition(
-				v1alpha1.BareMetalClusterConditionTypeHostsReady,
+			bareMetalPool.SetStatusCondition(
+				v1alpha1.BareMetalPoolConditionTypeHostsReady,
 				metav1.ConditionFalse,
-				v1alpha1.BareMetalClusterReasonInventoryServiceFailed,
+				v1alpha1.BareMetalPoolReasonInventoryServiceFailed,
 				"Failed to get hosts from inventory",
 			)
 			return nil, err
@@ -501,10 +501,10 @@ func (r *BareMetalClusterReconciler) verifyAvailableHosts(
 				"desired additional hosts", delta,
 				"current additional hosts", len(hosts),
 			)
-			bareMetalCluster.SetStatusCondition(
-				v1alpha1.BareMetalClusterConditionTypeHostsReady,
+			bareMetalPool.SetStatusCondition(
+				v1alpha1.BareMetalPoolConditionTypeHostsReady,
 				metav1.ConditionFalse,
-				v1alpha1.BareMetalClusterReasonInsufficientHosts,
+				v1alpha1.BareMetalPoolReasonInsufficientHosts,
 				"There are not enough available hosts in the inventory",
 			)
 			return nil, err
@@ -518,16 +518,16 @@ func (r *BareMetalClusterReconciler) verifyAvailableHosts(
 	return hostClassToAvailableHosts, nil
 }
 
-func (r *BareMetalClusterReconciler) markAndAttachHost(
+func (r *BareMetalPoolReconciler) markAndAttachHost(
 	ctx context.Context,
-	bareMetalCluster *v1alpha1.BareMetalCluster,
+	bareMetalPool *v1alpha1.BareMetalPool,
 	inventoryHost inventory.Host,
 	hostClassToCurrentHostSetSize map[string]int,
 ) (ctrl.Result, error) {
 	log := logf.FromContext(ctx).V(1)
 	ctx = logf.IntoContext(ctx, log)
 
-	clusterId := string(bareMetalCluster.UID)
+	clusterId := string(bareMetalPool.UID)
 	matchType, _ := inventoryHost.Extra["matchType"].(string)
 
 	// check if another cluster currently has this host
@@ -536,7 +536,7 @@ func (r *BareMetalClusterReconciler) markAndAttachHost(
 	err := r.Get(
 		ctx,
 		client.ObjectKey{
-			Namespace: bareMetalCluster.Namespace,
+			Namespace: bareMetalPool.Namespace,
 			Name:      hostName,
 		},
 		hostCR,
@@ -564,7 +564,7 @@ func (r *BareMetalClusterReconciler) markAndAttachHost(
 	/*
 		hostSetUpWorkflow := ""
 		hostTearDownWorkflow := ""
-		registeredProfile, ok := profile.Get(bareMetalCluster.Spec.Profile.Name)
+		registeredProfile, ok := profile.Get(bareMetalPool.Spec.Profile.Name)
 		if ok {
 			hostSetUpWorkflow = registeredProfile.HostSetUpWorkflow.String()
 			hostTearDownWorkflow = registeredProfile.HostTearDownWorkflow.String()
@@ -575,7 +575,7 @@ func (r *BareMetalClusterReconciler) markAndAttachHost(
 	hostCR = &hostv1alpha1.Host{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      hostName,
-			Namespace: bareMetalCluster.Namespace,
+			Namespace: bareMetalPool.Namespace,
 			Labels: client.MatchingLabels{
 				"osac.openshift.io/cluster-id": clusterId,
 				"osac.openshift.io/host-class": inventoryHost.HostClass,
@@ -588,7 +588,7 @@ func (r *BareMetalClusterReconciler) markAndAttachHost(
 			Online:    false,
 		},
 	}
-	err = controllerutil.SetControllerReference(bareMetalCluster, hostCR, r.Scheme)
+	err = controllerutil.SetControllerReference(bareMetalPool, hostCR, r.Scheme)
 	if err != nil {
 		log.Error(err, "Failed to set controller reference to Host CR", "NodeId", inventoryHost.NodeId)
 		return ctrl.Result{}, err
@@ -609,16 +609,16 @@ func (r *BareMetalClusterReconciler) markAndAttachHost(
 	return ctrl.Result{}, nil
 }
 
-func (r *BareMetalClusterReconciler) unmarkAndDetachHost(
+func (r *BareMetalPoolReconciler) unmarkAndDetachHost(
 	ctx context.Context,
-	bareMetalCluster *v1alpha1.BareMetalCluster,
+	bareMetalPool *v1alpha1.BareMetalPool,
 	inventoryHost inventory.Host,
 	hostClassToCurrentHostSetSize map[string]int,
 ) error {
 	log := logf.FromContext(ctx).V(1)
 	ctx = logf.IntoContext(ctx, log)
 
-	clusterId := string(bareMetalCluster.UID)
+	clusterId := string(bareMetalPool.UID)
 
 	// check if another cluster currently has this host
 	hostName := fmt.Sprintf("host-%s", inventoryHost.NodeId)
@@ -626,7 +626,7 @@ func (r *BareMetalClusterReconciler) unmarkAndDetachHost(
 	err := r.Get(
 		ctx,
 		client.ObjectKey{
-			Namespace: bareMetalCluster.Namespace,
+			Namespace: bareMetalPool.Namespace,
 			Name:      hostName,
 		},
 		hostCR,
@@ -650,10 +650,10 @@ func (r *BareMetalClusterReconciler) unmarkAndDetachHost(
 	err = r.InventoryClient.PatchInventoryHostClusterId(ctx, inventoryHost.NodeId, "")
 	if err != nil {
 		log.Error(err, "Failed to free host", "NodeId", inventoryHost.NodeId)
-		bareMetalCluster.SetStatusCondition(
-			v1alpha1.BareMetalClusterConditionTypeHostsReady,
+		bareMetalPool.SetStatusCondition(
+			v1alpha1.BareMetalPoolConditionTypeHostsReady,
 			metav1.ConditionFalse,
-			v1alpha1.BareMetalClusterReasonInventoryServiceFailed,
+			v1alpha1.BareMetalPoolReasonInventoryServiceFailed,
 			"Failed to free host",
 		)
 		return err
@@ -670,10 +670,10 @@ func (r *BareMetalClusterReconciler) unmarkAndDetachHost(
 }
 
 // runWorkflow runs a workflow by creating a Tekton PipelineRun
-func (r *BareMetalClusterReconciler) runWorkflow(ctx context.Context, bareMetalCluster *v1alpha1.BareMetalCluster, workflowReference profile.WorkflowReference) error {
+func (r *BareMetalPoolReconciler) runWorkflow(ctx context.Context, bareMetalPool *v1alpha1.BareMetalPool, workflowReference profile.WorkflowReference) error {
 	log := logf.FromContext(ctx)
-	pfName := bareMetalCluster.Spec.Profile.Name
-	pfParams := bareMetalCluster.Spec.Profile.Input
+	pfName := bareMetalPool.Spec.Profile.Name
+	pfParams := bareMetalPool.Spec.Profile.Input
 
 	if workflowReference.String() == "" {
 		log.Info("Skipping workflow")
@@ -685,9 +685,9 @@ func (r *BareMetalClusterReconciler) runWorkflow(ctx context.Context, bareMetalC
 	pipelineRun := &tektonv1.PipelineRun{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      pipelineRunName,
-			Namespace: bareMetalCluster.Namespace,
+			Namespace: bareMetalPool.Namespace,
 			Labels: map[string]string{
-				"osac.openshift.io/cluster-id": string(bareMetalCluster.UID),
+				"osac.openshift.io/cluster-id": string(bareMetalPool.UID),
 				"osac.openshift.io/profile":    pfName,
 			},
 		},
@@ -697,8 +697,8 @@ func (r *BareMetalClusterReconciler) runWorkflow(ctx context.Context, bareMetalC
 		},
 	}
 
-	// Set owner reference so PipelineRun is deleted when BareMetalCluster is deleted
-	err := controllerutil.SetControllerReference(bareMetalCluster, pipelineRun, r.Scheme)
+	// Set owner reference so PipelineRun is deleted when BareMetalPool is deleted
+	err := controllerutil.SetControllerReference(bareMetalPool, pipelineRun, r.Scheme)
 	if err != nil {
 		return err
 	}

@@ -7,7 +7,7 @@ rules:
 - apiGroups:
   - osac.openshift.io
   resources:
-  - baremetalclusters
+  - baremetalpools
   verbs:
   - create
   - delete
@@ -19,13 +19,13 @@ rules:
 - apiGroups:
   - osac.openshift.io
   resources:
-  - baremetalclusters/finalizers
+  - baremetalpools/finalizers
   verbs:
   - update
 - apiGroups:
   - osac.openshift.io
   resources:
-  - baremetalclusters/status
+  - baremetalpools/status
   verbs:
   - get
   - patch

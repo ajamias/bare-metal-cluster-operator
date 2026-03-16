@@ -30,7 +30,7 @@ import (
 	osacopenshiftiov1alpha1 "github.com/ajamias/bare-metal-operator/api/v1alpha1"
 )
 
-var _ = Describe("BareMetalCluster Controller", func() {
+var _ = Describe("BareMetalPool Controller", func() {
 	Context("When reconciling a resource", func() {
 		const resourceName = "test-resource"
 
@@ -40,13 +40,13 @@ var _ = Describe("BareMetalCluster Controller", func() {
 			Name:      resourceName,
 			Namespace: "default", // TODO(user):Modify as needed
 		}
-		baremetalcluster := &osacopenshiftiov1alpha1.BareMetalCluster{}
+		baremetalpool := &osacopenshiftiov1alpha1.BareMetalPool{}
 
 		BeforeEach(func() {
-			By("creating the custom resource for the Kind BareMetalCluster")
-			err := k8sClient.Get(ctx, typeNamespacedName, baremetalcluster)
+			By("creating the custom resource for the Kind BareMetalPool")
+			err := k8sClient.Get(ctx, typeNamespacedName, baremetalpool)
 			if err != nil && errors.IsNotFound(err) {
-				resource := &osacopenshiftiov1alpha1.BareMetalCluster{
+				resource := &osacopenshiftiov1alpha1.BareMetalPool{
 					ObjectMeta: metav1.ObjectMeta{
 						Name:      resourceName,
 						Namespace: "default",
@@ -59,16 +59,16 @@ var _ = Describe("BareMetalCluster Controller", func() {
 
 		AfterEach(func() {
 			// TODO(user): Cleanup logic after each test, like removing the resource instance.
-			resource := &osacopenshiftiov1alpha1.BareMetalCluster{}
+			resource := &osacopenshiftiov1alpha1.BareMetalPool{}
 			err := k8sClient.Get(ctx, typeNamespacedName, resource)
 			Expect(err).NotTo(HaveOccurred())
 
-			By("Cleanup the specific resource instance BareMetalCluster")
+			By("Cleanup the specific resource instance BareMetalPool")
 			Expect(k8sClient.Delete(ctx, resource)).To(Succeed())
 		})
 		It("should successfully reconcile the resource", func() {
 			By("Reconciling the created resource")
-			controllerReconciler := &BareMetalClusterReconciler{
+			controllerReconciler := &BareMetalPoolReconciler{
 				Client: k8sClient,
 				Scheme: k8sClient.Scheme(),
 			}
